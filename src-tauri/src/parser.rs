@@ -1,4 +1,4 @@
-use bencode_encoder::{Decoder,BencodeError,BencodeResult};
+use bencode_encoder::{Decoder};
 use std::path::Path;
 use std::fs::File;
 use std::io::Write;
