@@ -2,8 +2,6 @@ use serde::{Deserialize,Serialize};
 use std::collections::HashMap;
 use linked_hash_set::LinkedHashSet;
 use sha1::{Digest,Sha1};
-use bencode_encoder::{Encoder};
-use serde_json::Value;
 use serde_json;
 use std::path::Path;
 use std::io::BufReader;
@@ -81,12 +79,12 @@ impl TorrentMetaData{
             })
             .collect()
     }
-    pub fn hash_info(&self) {
-        todo!()
-    }
 
     pub fn get_total_size(&self)->i64{
-        todo!()
+        if let Some(files) = &self.info.files {
+            return files.iter().map(|file| file.length).sum()
+        }
+        return self.info.length.unwrap_or(0)
     }
     pub fn get_file_structure(&self)->Vec<(String,i64)>{
         todo!()
