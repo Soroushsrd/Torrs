@@ -1,9 +1,26 @@
-use bencode_encoder::{Decoder};
+use bencode_encoder::{Decoder, Encoder};
 use std::path::Path;
 use std::fs::File;
 use std::io::Write;
+use sha1::{Digest, Sha1};
+
+pub fn calculate_info_hash(torrent_path: &str) -> Result<[u8; 20], Box<dyn std::error::Error>> {
+    let path = Path::new(torrent_path);
+    if !path.exists(){
+        return Err(format!("Input file does not exist: {}", torrent_path).into());
+    }
+
+    let decoded = Decoder::decode_from(path)?;
+    let info = decoded.get("info".to_string()).expect("Could not find the info part");
+    let info_bencoded = Encoder::encode(info).expect("Could not bencode the info values");
+    let mut hasher = Sha1::new();
+
+    hasher.update(info_bencoded);
+    Ok(hasher.finalize().into())
 
 
+
+}
 pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::Error>> {
     let input_path = Path::new(bpath);
     let output_path = Path::new(opath);
