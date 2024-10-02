@@ -1,5 +1,10 @@
 use serde::{Deserialize,Serialize};
 use std::collections::HashMap;
+use linked_hash_set::LinkedHashSet;
+use sha1::{Digest,Sha1};
+use bencode_encoder::{Encoder};
+use serde_json::Value;
+use serde_json;
 use std::path::Path;
 use std::io::BufReader;
 use std::fs::File;
@@ -46,7 +51,45 @@ impl TorrentMetaData{
         
         let torrent_meta_data = serde_json::from_reader(reader).expect("serde could not read the buffer");
         Ok(torrent_meta_data)
+    }
+    
+    pub fn get_tracker_url(&self)-> Vec<String>{
+        let mut trackers = LinkedHashSet::new();
+        let main_url = self.announce.clone();
+        trackers.insert(main_url);
+        
+        if let Some(secondary_urls) = self.announce_list.clone() {
+            for sub_url in secondary_urls {
+                for url in sub_url{
+                    trackers.insert(url);
+                }
+            }
+        }
+        trackers.into_iter().collect()
+    }
 
+    pub fn get_pieces_length(&self) -> i64{
+        self.info.piece_length
+    }
+    pub fn get_pieces_hashes(&self)->Vec<[u8;20]>{
+        self.info.pieces.as_bytes()
+            .chunks(20)
+            .map(|chunk| {
+                let mut hash = [0u8;20];
+                hash.copy_from_slice(chunk);
+                hash
+            })
+            .collect()
+    }
+    pub fn hash_info(&self) {
+        todo!()
+    }
+
+    pub fn get_total_size(&self)->i64{
+        todo!()
+    }
+    pub fn get_file_structure(&self)->Vec<(String,i64)>{
+        todo!()
     }
 }
 
