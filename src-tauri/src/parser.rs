@@ -37,19 +37,30 @@ pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::E
         Err(e) => Err(format!("Error opening or decoding file: {}", e).into()),
         Ok(mut t) => {
             println!("Successfully decoded torrent file");
+            println!("Type of decoded content: {:?}", t);
 
-            if let Dictionary(ref mut dict) = t{
-                if let Some(pieces) = dict.get_mut("pieces"){
+            if let Dictionary(ref mut dict) = t {
+                if let Some(Dictionary(info_dict)) = dict.get_mut("info") {
+                    if let Some(pieces) = info_dict.get_mut("pieces") {
+                        if let Type::ByteString(ref pieces_bytes) = pieces {
 
-                    if let Type::ByteString(ref pieces_bytes) = pieces{
-                        let mut pieces_base64 = String::new();
-                        general_purpose::STANDARD.encode_string(pieces_bytes.as_bytes(),&mut pieces_base64);
-                        *pieces = Type::ByteString(pieces_base64);
+                            let pieces_base64 = general_purpose::STANDARD.encode(pieces_bytes);
+                            println!("Base64 encoded pieces (first 100 chars): {}", &pieces_base64[..100.min(pieces_base64.len())]);
+
+                            *pieces = Type::ByteString(pieces_base64.into());
+
+                        } else {
+                            println!("Pieces entry is not a byte string");
+                        }
+                    } else {
+                        println!("No pieces entry found in the dictionary");
                     }
+                } else {
+                    println!("Decoded content is not a dictionary");
                 }
             }
 
-            let json_content = t.to_json().unwrap();
+            let json_content = serde_json::to_string_pretty(&t)?;
             match File::create(output_path) {
                 Ok(mut file) => {
                     match file.write_all(json_content.as_bytes()) {
