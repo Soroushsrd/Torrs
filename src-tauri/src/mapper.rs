@@ -2,6 +2,7 @@ use serde::{Deserialize,Serialize};
 use std::collections::HashMap;
 use linked_hash_set::LinkedHashSet;
 use sha1::{Digest};
+use sha1::Sha1;
 use serde_json;
 use std::path::Path;
 use std::io::BufReader;
@@ -101,7 +102,12 @@ impl TorrentMetaData{
             vec![(self.info.name.clone(),self.info.length.unwrap_or(0))]
         }
     }
-}
+    pub fn calculate_info_hash(&self) -> Result<[u8; 20], Box<dyn std::error::Error>> {
+        let info_bencoded = serde_bencode::to_bytes(&self.info)?;
+        let mut hasher = Sha1::new();
+        hasher.update(&info_bencoded);
+        Ok(hasher.finalize().into())
+    }}
 
 
 #[cfg(test)]
@@ -153,6 +159,12 @@ mod tests{
         let pieces_hashes = result.get_pieces_hashes();
         println!("pieces_hashes: {:?}",pieces_hashes);
     }
-
+    #[test]
+    fn test_hash_info(){
+        let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
+        let result = TorrentMetaData::from_file(path).unwrap();
+        let info_hash = result.calculate_info_hash().unwrap();
+        println!("info_hashes: {:?}",info_hash);
+    }
 
 }
