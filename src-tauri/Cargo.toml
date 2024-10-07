@@ -18,6 +18,11 @@ bencode-encoder = "0.1.2"
 linked_hash_set= "0.1.4"
 sha1 = "0.10.6"
 base64 = "0.22.1"
+rand = "0.8.5"
+url = "2.5.2"
+reqwest = "0.12.8"
+serde_bencode = "0.2.4"
+log = "0.4.22"
 
 [features]
 # This feature is used for production builds or when a dev server is not specified, DO NOT REMOVE!!
