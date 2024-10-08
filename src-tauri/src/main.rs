@@ -4,6 +4,7 @@
 mod parser;
 mod mapper;
 mod downloader;
+mod peer;
 
 // Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
 #[tauri::command]
