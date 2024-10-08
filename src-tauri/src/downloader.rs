@@ -4,7 +4,6 @@ use rand::Rng;
 use reqwest;
 use serde::Deserialize;
 use serde_bencode;
-use log::info;
 
 #[derive(Debug,Deserialize)]
 pub struct TrackerResponse{
