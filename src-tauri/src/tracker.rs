@@ -4,7 +4,7 @@ use rand::Rng;
 use reqwest;
 use serde::Deserialize;
 use serde_bencode;
-use crate::peer::{Peer, PeerInfo};
+use crate::peer::{PeerInfo};
 
 #[derive(Debug,Deserialize)]
 pub struct TrackerResponse{
