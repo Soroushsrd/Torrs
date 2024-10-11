@@ -95,6 +95,7 @@ impl TorrentMetaData{
         }
         return self.info.length.unwrap_or(0)
     }
+
     pub fn get_file_structure(&self)->Vec<(String,i64)>{
         if let Some(files) = &self.info.files{
             return files.iter().map(|file| (file.path.join("/"),file.length)).collect();
@@ -102,6 +103,7 @@ impl TorrentMetaData{
             vec![(self.info.name.clone(),self.info.length.unwrap_or(0))]
         }
     }
+
     pub fn calculate_info_hash(&self) -> Result<[u8; 20], Box<dyn std::error::Error>> {
         let info_bencoded = serde_bencode::to_bytes(&self.info)?;
         let mut hasher = Sha1::new();
@@ -135,6 +137,9 @@ mod tests{
         let result = TorrentMetaData::from_file(path).unwrap();
         let file_structure = result.get_file_structure();
         println!("file structure: {:?}",file_structure);
+        for file in file_structure{ 
+            println!("files seperately:{:?}",file.0)
+        }
     }
     #[test]
     fn test_get_tracker_url(){

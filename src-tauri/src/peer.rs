@@ -77,10 +77,9 @@ impl Peer {
         let mut msg_len = [0u8;4];
         stream.read_exact(&mut msg_len).await?;
         let msg_len = u32::from_be_bytes(msg_len) as usize;
-
+        
         let mut msg_id = [0u8;1];
         stream.read_exact(&mut msg_id).await?;
-        let msg_id = u32::from_be_bytes(msg_id) as usize;
         if msg_id[0] != 5 {
             return Err("Expected bitfield message".into());
         }
@@ -100,7 +99,6 @@ impl Peer {
 
         let mut msg_id = [0u8;1];
         stream.read_exact(&mut msg_id).await?;
-        let msg_id = u32::from_be_bytes(msg_id) as usize;
         if msg_id[0] != 1 {
             return Err("Expected unchoke message".into());
         }
