@@ -3648,6 +3648,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_bencode",
+ "serde_bytes",
  "serde_json",
  "sha1",
  "tauri",
