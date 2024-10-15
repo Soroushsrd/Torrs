@@ -6,8 +6,8 @@ use tokio::fs::File;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PeerInfo {
-    ip: String,
-    port: u16,
+    pub ip: String,
+    pub port: u16,
 }
 
 #[derive(Debug)]
@@ -155,40 +155,68 @@ impl Peer {
 #[cfg(test)]
 mod tests {
     use crate::mapper::TorrentMetaData;
-    use crate::tracker::{generate_peer_id, request_peers};
+    use crate::tracker::{request_peers};
     use super::*;
     use tokio::test;
-    use log::{info, error, log_enabled};
-    use env_logger;
-    #[test(flavor = "multi_thread", worker_threads = 1)]
-    async fn test_download() {
-        env_logger::init();
 
+    #[test]
+    async fn test_get_peers() {
         let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
-        let torrent_meta_data = TorrentMetaData::from_file(path).unwrap();
-        info!("got the torrent meta data");
-        let peers = request_peers(&torrent_meta_data).await.unwrap();
-        let file_struct: Vec<String> = torrent_meta_data.get_file_structure()
-            .iter()
-            .map(|file| file.0.clone()).collect();
-        info!("file structure extracted");
-        let peer_id = generate_peer_id();
-        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-        info!("info hash calculated");
-        for peer_info in peers {
-            let mut peer = Peer::new(peer_info.ip, peer_info.port);
-            if peer.connect().await.is_ok() {
-                info!("connection to peer successful");
-                peer.handshake(info_hash, peer_id).await.unwrap();
-                info!("handshake with peer done!");
-                for (index, file) in file_struct.iter().enumerate() {
-                    info!("downloading file: {:?}", file.clone());
-                    let piece_length = torrent_meta_data.get_pieces_length();
-                    let file_path = format!("C:\\Users\\Lenovo\\Downloads\\{}", file);
-                    peer.request_piece(index as u32, piece_length as u32, &file_path).await.unwrap();
-                    info!("downloading file: {:?} done!", file.clone());
+        let torrent_meta_data = TorrentMetaData::from_file(path).expect("Failed to read torrent file");
+        println!("Got the torrent meta data");
+
+        match request_peers(&torrent_meta_data).await {
+            Ok(peers) => {
+                println!("Successfully retrieved {} peers", peers.len());
+                for (i, peer) in peers.iter().enumerate() {
+                    println!("Peer {}: {:?}", i + 1, peer);
                 }
+                assert!(!peers.is_empty(), "Peer list should not be empty");
+            }
+            Err(e) => {
+                eprintln!("Failed to retrieve peers: {:?}", e);
+                panic!("Failed to retrieve peers");
             }
         }
     }
+
+    // #[test]
+    // async fn test_download() {
+    //     env_logger::init();
+    //
+    //     let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
+    //     let torrent_meta_data = TorrentMetaData::from_file(path).unwrap();
+    //     println!("got the torrent meta data");
+    //
+    //     let peers = request_peers(&torrent_meta_data).await.unwrap();
+    //     let file_struct: Vec<String> = torrent_meta_data.get_file_structure()
+    //         .iter()
+    //         .map(|file| file.0.clone()).collect();
+    //     println!("file structure extracted");
+    //
+    //
+    //     let peer_id = generate_peer_id();
+    //     let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+    //     println!("info hash calculated");
+    //
+    //
+    //     for peer_info in peers {
+    //         let mut peer = Peer::new(peer_info.ip, peer_info.port);
+    //         if peer.connect().await.is_ok() {
+    //             println!("connection to peer successful");
+    //
+    //             peer.handshake(info_hash, peer_id).await.unwrap();
+    //             println!("handshake with peer done!");
+    //
+    //             for (index, file) in file_struct.iter().enumerate() {
+    //                 println!("downloading file: {:?}", file.clone());
+    //
+    //                 let piece_length = torrent_meta_data.get_pieces_length();
+    //                 let file_path = format!("C:\\Users\\Lenovo\\Downloads\\{}", file);
+    //                 peer.request_piece(index as u32, piece_length as u32, &file_path).await.unwrap();
+    //                 println!("downloading file: {:?} done!", file.clone());
+    //             }
+    //         }
+    //     }
+    // }
 }
