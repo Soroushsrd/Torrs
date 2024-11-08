@@ -90,9 +90,9 @@ pub async fn request_tracker(announce: &str, info_hash: &[u8; 20], total_length:
         .append_pair("event", "started");
 
     let response = reqwest::get(url).await.unwrap().bytes().await?;
-    println!("Response: {:?}", response.clone());
+
     let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)?;
-    println!("{:?}", tracker_response);
+
     let peers = if !tracker_response.peer.is_empty() {
         tracker_response.peer
     } else if let Some(binary_peer) = tracker_response.peers_binary {
