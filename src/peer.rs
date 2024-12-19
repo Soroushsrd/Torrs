@@ -1,9 +1,9 @@
-use tokio::net::TcpStream;
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::time::Duration;
-use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::time::timeout;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -22,10 +22,7 @@ pub const PROTOCOL: &str = "BitTorrent protocol";
 
 impl Peer {
     pub fn new(ip: String, port: u16) -> Self {
-        let peer_info = PeerInfo {
-            ip,
-            port,
-        };
+        let peer_info = PeerInfo { ip, port };
         Peer {
             peer_info,
             stream: None,
@@ -38,7 +35,11 @@ impl Peer {
         Ok(())
     }
 
-    pub async fn handshake(&mut self, info_hash: [u8; 20], peer_id: [u8; 20]) -> Result<(), Box<dyn Error>> {
+    pub async fn handshake(
+        &mut self,
+        info_hash: [u8; 20],
+        peer_id: [u8; 20],
+    ) -> Result<(), Box<dyn Error>> {
         if self.stream.is_none() {
             return Err("Stream not established yet".into());
         }
@@ -82,7 +83,12 @@ impl Peer {
         Ok(())
     }
 
-    pub async fn request_piece(&mut self, index: u32, piece_length: u32, file_path: &str) -> Result<(), Box<dyn Error>> {
+    pub async fn request_piece(
+        &mut self,
+        index: u32,
+        piece_length: u32,
+        file_path: &str,
+    ) -> Result<(), Box<dyn Error>> {
         if self.stream.is_none() {
             return Err("Not connected to peer".into());
         }
@@ -166,20 +172,50 @@ impl Peer {
 
         Ok(())
     }
+    pub async fn send_msg(&mut self, message: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(stream) = self.stream.as_mut() {
+            stream
+                .write_all(message)
+                .await
+                .expect("Failed to write the message in TCP stream!");
+            stream.flush().await.expect("Failed to flush the stream");
+            Ok(())
+        } else {
+            Err("No stream was found!".into())
+        }
+    }
+    pub async fn receive_msg(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        if let Some(stream) = self.stream.as_mut() {
+            let mut length_bytes = [0u8; 4];
+            stream
+                .read_exact(&mut length_bytes)
+                .await
+                .expect("Failed to read the length bytes");
+            let length = u32::from_be_bytes(length_bytes);
+            let mut msg = vec![0u8; length as usize];
+            stream
+                .read_exact(&mut msg)
+                .await
+                .expect("Failed to read the message!");
+            Ok(msg)
+        } else {
+            Err("No stream was found!".into())
+        }
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::mapper::TorrentMetaData;
     use crate::tracker::{generate_peer_id, request_peers};
-    use super::*;
     use tokio::test;
 
     #[test]
     async fn test_get_peers() {
         let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
-        let torrent_meta_data = TorrentMetaData::from_file(path).expect("Failed to read torrent file");
+        let torrent_meta_data =
+            TorrentMetaData::from_file(path).expect("Failed to read torrent file");
         println!("Got the torrent meta data");
 
         match request_peers(&torrent_meta_data).await {
@@ -211,20 +247,21 @@ mod tests {
         // .map(|file| file.0.clone()).collect();
         println!("file structure extracted");
 
-
         let peer_id = generate_peer_id();
         let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
         println!("info hash calculated");
-
 
         for peer_info in peers {
             let mut peer = Peer::new(peer_info.clone().ip, peer_info.clone().port);
             if peer.connect().await.is_ok() {
                 println!("connection to peer successful");
 
-                peer.handshake(info_hash, peer_id).await.map_err(|e| {
-                    eprintln!("Failed to handshake with peer: {:?}", e);
-                }).unwrap();
+                peer.handshake(info_hash, peer_id)
+                    .await
+                    .map_err(|e| {
+                        eprintln!("Failed to handshake with peer: {:?}", e);
+                    })
+                    .unwrap();
                 println!("handshake with peer done!");
                 let total_bytes = 0;
                 for (file_index, (file, file_length)) in file_struct.iter().enumerate() {
@@ -235,9 +272,11 @@ mod tests {
                     // let start_piece = total_bytes / piece_length;
                     // let end_piece = (total_bytes + file_length - 1) / piece_length;
 
-                    peer.request_piece(file_index as u32, piece_length as u32, &file_path).await.map_err(|e| {
-                        eprintln!("Failed to download file: {:?}", e);
-                    });
+                    peer.request_piece(file_index as u32, piece_length as u32, &file_path)
+                        .await
+                        .map_err(|e| {
+                            eprintln!("Failed to download file: {:?}", e);
+                        });
                     println!("downloading file: {:?} done!", file.clone());
                 }
             } else {
