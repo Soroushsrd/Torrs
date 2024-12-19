@@ -1,13 +1,14 @@
-use std::net::Ipv4Addr;
-use std::time::Duration;
 use crate::mapper::*;
-use url::Url;
+use crate::peer::PeerInfo;
 use rand::Rng;
 use serde::Deserialize;
-use tokio::task;
-use crate::peer::{PeerInfo};
 use serde_bytes::ByteBuf;
+use std::net::Ipv4Addr;
+use std::time::Duration;
+use tokio::task;
+use url::Url;
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TrackerResponse {
     interval: Option<i64>,
@@ -31,7 +32,9 @@ pub fn generate_peer_id() -> [u8; 20] {
 }
 
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
-pub async fn request_peers(torrent: &TorrentMetaData) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
+pub async fn request_peers(
+    torrent: &TorrentMetaData,
+) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
     let info_hash = torrent.calculate_info_hash()?;
     let trackers = torrent.get_tracker_url();
     let total_length = torrent.get_total_size();
@@ -48,7 +51,12 @@ pub async fn request_peers(torrent: &TorrentMetaData) -> Result<Vec<PeerInfo>, B
         let info_hash = info_hash.clone();
 
         let handle = task::spawn(async move {
-            match tokio::time::timeout(Duration::from_secs(10), request_tracker(&tracker, &info_hash, total_length)).await {
+            match tokio::time::timeout(
+                Duration::from_secs(10),
+                request_tracker(&tracker, &info_hash, total_length),
+            )
+            .await
+            {
                 Ok(Ok(peers)) => Ok((tracker, peers)),
                 Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
                 Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
@@ -61,7 +69,11 @@ pub async fn request_peers(torrent: &TorrentMetaData) -> Result<Vec<PeerInfo>, B
     for handle in handles {
         match handle.await {
             Ok(Ok((tracker, peers))) => {
-                println!("Successfully retrieved {} peers from tracker: {}", peers.len(), tracker);
+                println!(
+                    "Successfully retrieved {} peers from tracker: {}",
+                    peers.len(),
+                    tracker
+                );
                 return Ok(peers);
             }
             Ok(Err(e)) => eprintln!("{}", e),
@@ -72,10 +84,12 @@ pub async fn request_peers(torrent: &TorrentMetaData) -> Result<Vec<PeerInfo>, B
     Err("Failed to retrieve peers from any tracker".into())
 }
 
-
 /// Request Trackers based on the info that has been parsed from torrent file.
-pub async fn request_tracker(announce: &str, info_hash: &[u8; 20], total_length: i64)
-                             -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
+pub async fn request_tracker(
+    announce: &str,
+    info_hash: &[u8; 20],
+    total_length: i64,
+) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
     let mut url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
@@ -108,25 +122,21 @@ pub async fn request_tracker(announce: &str, info_hash: &[u8; 20], total_length:
     }
 }
 
-
 pub fn parse_binary_peers(binary: &[u8]) -> Vec<PeerInfo> {
-    binary.chunks(6)
+    binary
+        .chunks(6)
         .filter_map(|chunk| {
             if chunk.len() == 6 {
                 let ip = Ipv4Addr::new(chunk[0], chunk[1], chunk[2], chunk[3]).to_string();
                 let port = u16::from_be_bytes([chunk[4], chunk[5]]);
-                Some(PeerInfo {
-                    ip,
-                    port,
-                })
+                Some(PeerInfo { ip, port })
             } else {
                 None
             }
-        }).collect()
+        })
+        .collect()
 }
 /// Encodes url to a String
 fn urlencode(bytes: &[u8]) -> String {
-    bytes.iter()
-        .map(|&b| format!("%{:02X}", b))
-        .collect()
+    bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
 }
