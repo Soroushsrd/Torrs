@@ -54,25 +54,44 @@ pub struct MetaDataMessage {
 #[allow(dead_code)]
 impl MagnetInfo {
     pub async fn to_torrent_metadata(&self) -> Result<TorrentMetaData, Box<dyn std::error::Error>> {
-        let mut metadata = None;
+        let mut all_peers = Vec::new();
+
+        println!(
+            "Attempting to get peers from {} trackers",
+            self.trackers.len()
+        );
         for tracker in &self.trackers {
+            println!("Trying tracker: {}", tracker);
             match request_tracker(tracker, &self.info_hash, 0).await {
-                Ok(peer) => {
-                    if let Ok(data) = self.fetch_metadata_from_peers(&peer).await {
-                        metadata = Some(data);
-                        break;
-                    }
+                Ok(peers) => {
+                    println!("Got {} peers from tracker {}", peers.len(), tracker);
+                    all_peers.extend(peers);
                 }
                 Err(e) => {
-                    println!("FAiled to get peers from tracker {}: {}", tracker, e);
+                    println!("Failed to get peers from tracker {}: {}", tracker, e);
                     continue;
                 }
             }
         }
-        let metadata_bytes = metadata.ok_or("Failed to get metadata bytes from trackers")?;
-        let torrent_metadata: TorrentMetaData =
-            serde_bencode::from_bytes(&metadata_bytes).expect("Failed to extract torrent metadata");
-        Ok(torrent_metadata)
+
+        if all_peers.is_empty() {
+            return Err("Could not get any peers from any tracker".into());
+        }
+
+        println!("Total peers collected: {}", all_peers.len());
+        match self.fetch_metadata_from_peers(&all_peers).await {
+            Ok(metadata_bytes) => {
+                let torrent_metadata: TorrentMetaData = serde_bencode::from_bytes(&metadata_bytes)
+                    .map_err(|e| format!("Failed to decode metadata: {}", e))?;
+                Ok(torrent_metadata)
+            }
+            Err(e) => Err(format!(
+                "Failed to get metadata from {} peers: {}",
+                all_peers.len(),
+                e
+            )
+            .into()),
+        }
     }
     pub async fn fetch_metadata_from_peer(
         &self,
@@ -226,18 +245,23 @@ impl MagnetInfo {
         Ok(())
     }
     pub fn parse(magnet_url: &str) -> Result<MagnetInfo, Box<dyn std::error::Error>> {
-        let url = Url::parse(magnet_url).unwrap();
-        let params: HashMap<_, _> = url.query_pairs().collect();
+        let url = Url::parse(magnet_url)?;
 
-        let info_hash = if let Some(xt) = params.get("xt") {
+        // Get all query parameters, including duplicates
+        let params: Vec<(String, String)> = url
+            .query_pairs()
+            .map(|(k, v)| (k.into_owned(), v.into_owned()))
+            .collect();
+
+        let info_hash = if let Some((_, xt)) = params.iter().find(|(k, _)| k == "xt") {
             if let Some(hash) = xt.strip_prefix("urn:btih:") {
                 if hash.len() == 40 {
                     let mut result = [0u8; 20];
-                    hex::decode_to_slice(hash, &mut result).unwrap();
+                    hex::decode_to_slice(hash, &mut result)?;
                     result
                 } else if hash.len() == 32 {
                     let mut result = [0u8; 20];
-                    let decoded = BASE32.decode(hash.as_bytes()).unwrap();
+                    let decoded = BASE32.decode(hash.as_bytes())?;
                     result.copy_from_slice(&decoded);
                     result
                 } else {
@@ -251,14 +275,21 @@ impl MagnetInfo {
         };
 
         let display_name = params
-            .get("dn")
-            .map(|dn| percent_decode_str(dn).decode_utf8_lossy().into_owned());
+            .iter()
+            .find(|(k, _)| k == "dn")
+            .map(|(_, v)| percent_decode_str(v).decode_utf8_lossy().into_owned());
 
+        // Collect all trackers (tr parameters)
         let trackers = params
             .iter()
-            .filter(|(k, _)| *k == "tr")
-            .map(|(_, tracker)| percent_decode_str(tracker).decode_utf8_lossy().into_owned())
-            .collect();
+            .filter(|(k, _)| k == "tr")
+            .map(|(_, v)| percent_decode_str(v).decode_utf8_lossy().into_owned())
+            .collect::<Vec<String>>();
+
+        println!("Found {} trackers in magnet link:", trackers.len());
+        for tracker in &trackers {
+            println!("  - {}", tracker);
+        }
 
         let peers = Some(
             params
@@ -438,5 +469,26 @@ mod tests {
             .await
             .unwrap();
         println!("Metadata fetched: {:?}", results);
+    }
+    #[tokio::test]
+    async fn test_magnet_download() {
+        let magnet = "magnet:?xt=urn:btih:12451f81a977a2d8bb402f21cd643422c5d4c50a&dn=The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
+
+        let magnet_info = MagnetInfo::parse(magnet).expect("Failed to parse magnet link");
+        println!("Successfully parsed magnet link");
+        println!("Display name: {:?}", magnet_info.display_name);
+        println!("Number of trackers: {}", magnet_info.trackers.len());
+
+        // Create a test output directory
+        let output_dir = "./test_downloads";
+
+        // Try to download
+        match magnet_info.download(output_dir).await {
+            Ok(_) => println!("Download completed successfully"),
+            Err(e) => {
+                println!("Download failed: {}", e);
+                panic!("Download test failed");
+            }
+        }
     }
 }
