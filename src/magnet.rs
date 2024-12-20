@@ -223,7 +223,7 @@ impl MagnetInfo {
         let params: HashMap<_, _> = url.query_pairs().collect();
 
         let info_hash = if let Some(xt) = params.get("xt") {
-            if let Some(hash) = xt.strip_prefix("urn:btih") {
+            if let Some(hash) = xt.strip_prefix("urn:btih:") {
                 if hash.len() == 40 {
                     let mut result = [0u8; 20];
                     hex::decode_to_slice(hash, &mut result).unwrap();
@@ -267,5 +267,46 @@ impl MagnetInfo {
             trackers,
             peers,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio;
+
+    #[test]
+    fn test_magnet_parser() {
+        let magnet = "magnet:?xt=urn:btih:12451f81a977a2d8bb402f21cd643422c5d4c50a&dn=The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
+
+        let result = MagnetInfo::parse(magnet).unwrap();
+
+        assert_eq!(
+            result.display_name.unwrap().as_str(),
+            "The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY"
+        );
+    }
+    #[test]
+    fn test_base32_magnet() {
+        let magnet = "magnet:?xt=urn:btih:c9e15763f722f23e98a29decdfae341b98d53056&dn=Test&tr=udp%3A%2F%2Ftracker.example.org%3A6969";
+        let magnet_info = MagnetInfo::parse(magnet).unwrap();
+        assert!(magnet_info.info_hash.len() == 20);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_metadata_from_peers() {
+        let magnet = "magnet:?xt=urn:btih:12451f81a977a2d8bb402f21cd643422c5d4c50a&dn=The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
+
+        let magnet_info = MagnetInfo::parse(magnet).unwrap();
+        let peer_test = vec![PeerInfo {
+            ip: "127.0.0.1".to_string(),
+            port: 6881,
+        }];
+
+        let results = magnet_info
+            .fetch_metadata_from_peers(&peer_test)
+            .await
+            .unwrap();
+        println!("Metadata fetched: {:?}", results);
     }
 }
