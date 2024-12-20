@@ -1,19 +1,25 @@
 use crate::{
     mapper::TorrentMetaData,
     peer::{Peer, PeerInfo},
-    tracker::{generate_peer_id, request_tracker},
+    tracker::{generate_peer_id, request_peers, request_tracker},
 };
 use data_encoding::BASE32;
-use futures::{future::join_all, AsyncWriteExt};
+use futures::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::{
+    digest::{crypto_common::KeyInit, Update},
+    Digest, Sha1,
+};
+use std::path::Path;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::timeout;
 use url::Url;
+
 const METADATA_PIECE_SIZE: usize = 16384; //metadata is chunked into 16kb pieces!
 const EXTENSION_HANDSHAKE_ID: usize = 0;
 const METADATA_EXTENSION_ID: usize = 1;
@@ -45,6 +51,7 @@ pub struct MetaDataMessage {
     total_size: Option<i64>,
 }
 
+#[allow(dead_code)]
 impl MagnetInfo {
     pub async fn to_torrent_metadata(&self) -> Result<TorrentMetaData, Box<dyn std::error::Error>> {
         let mut metadata = None;
@@ -267,6 +274,129 @@ impl MagnetInfo {
             trackers,
             peers,
         })
+    }
+    pub async fn download(&self, output_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Fetching metadata from the magnet link!");
+
+        let metadata = self
+            .to_torrent_metadata()
+            .await
+            .expect("Failed to convert the link to metadata!");
+
+        println!("Getting the peer list...!");
+
+        let peers = request_peers(&metadata)
+            .await
+            .expect("Failed to request peers from magnet link metadata!");
+        if peers.is_empty() {
+            return Err("No peer is available!".into());
+        }
+
+        tokio::fs::create_dir_all(output_dir)
+            .await
+            .expect("Failed to create a directory!");
+
+        let pieces_length = metadata.get_pieces_length();
+        let pieces_hashes = metadata.get_pieces_hashes();
+        let file_structure = metadata.get_file_structure();
+        let total_pieces = pieces_hashes.len();
+
+        println!("Starting the download of {} pieces...!", total_pieces);
+
+        let mut good_peer = None;
+        for peer in peers {
+            let mut tmp_peer = Peer::new(peer.ip.clone(), peer.port);
+
+            match tmp_peer.connect().await {
+                Ok(_) => {
+                    println!("Connected to {}:{}", peer.ip.clone(), peer.port);
+                    let info_hash = metadata
+                        .calculate_info_hash()
+                        .expect("Failed to calculate the info hash!");
+                    match tmp_peer.handshake(info_hash, generate_peer_id()).await {
+                        Ok(_) => {
+                            println!("Handshake successful!");
+                            good_peer = Some(tmp_peer);
+                            break;
+                        }
+                        Err(e) => {
+                            println!("Handshake Failed! {}", e);
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("Failed to connect to the peer!");
+                    continue;
+                }
+            }
+        }
+        let mut peer = good_peer.ok_or("Could not find a peer!").unwrap();
+
+        for (piece_index, piece_hash) in pieces_hashes.iter().enumerate() {
+            println!("Downloading {}/{} ... ", piece_index + 1, total_pieces);
+            let file_path = format!("{}/piece_{}", output_dir, piece_index);
+            match peer
+                .request_piece(piece_index as u32, pieces_length as u32, &file_path)
+                .await
+            {
+                Ok(_) => {
+                    let piece_data = tokio::fs::read(file_path.as_str())
+                        .await
+                        .expect("Failed to read the file");
+                    let mut hasher = Sha1::new();
+                    Digest::update(&mut hasher, &piece_data);
+                    let downloaded_data: [u8; 20] = hasher.finalize().into();
+                    if &downloaded_data != piece_hash {
+                        return Err(
+                            format!("Piece {} hash verification failed!", piece_index).into()
+                        );
+                    }
+                    println!("Piece {} verified sucessfully!", piece_index);
+                }
+                Err(e) => {
+                    return Err(format!("Failed to receive piece {}: {}", piece_index, e).into());
+                }
+            }
+        }
+        println!("Reconstructing the file tree..");
+        for (file_path, file_length) in file_structure {
+            let output_path = format!("{}/{}", output_dir, file_path);
+            if let Some(parent) = Path::new(&output_path).parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let mut output_file = tokio::fs::File::create(&output_path)
+                .await
+                .expect("Failed to create output file!");
+            let mut bytes_written = 0i64;
+
+            while bytes_written < file_length {
+                let piece_index = (bytes_written / pieces_length as i64) as usize;
+                let piece_path = format!("{}/piece_{}", output_dir, piece_index);
+                let mut piece_data = tokio::fs::File::open(&piece_path).await?;
+
+                let offset = bytes_written % pieces_length as i64;
+                piece_data
+                    .seek(std::io::SeekFrom::Start(offset as u64))
+                    .await
+                    .unwrap();
+
+                let bytes_to_write =
+                    std::cmp::min(pieces_length as i64 - offset, file_length - bytes_written)
+                        as usize;
+                let mut buffer = vec![0u8; bytes_to_write];
+                piece_data.read_exact(&mut buffer).await?;
+                output_file.write_all(&buffer).await?;
+
+                bytes_written += bytes_to_write as i64;
+            }
+        }
+        for piece_index in 0..total_pieces {
+            let piece_path = format!("{}/piece_{}", output_dir, piece_index);
+            tokio::fs::remove_file(piece_path).await?;
+        }
+        println!("Download Completed Successfully!");
+        Ok(())
     }
 }
 
