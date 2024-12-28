@@ -14,7 +14,7 @@ pub struct PeerInfo {
 
 #[derive(Debug)]
 pub struct Peer {
-    peer_info: PeerInfo,
+    pub peer_info: PeerInfo,
     stream: Option<TcpStream>,
 }
 
