@@ -7,10 +7,7 @@ use data_encoding::BASE32;
 use futures::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
-use sha1::{
-    digest::{crypto_common::KeyInit, Update},
-    Digest, Sha1,
-};
+use sha1::{Digest, Sha1};
 use std::path::Path;
 use std::{
     collections::{HashMap, HashSet},
@@ -98,13 +95,28 @@ impl MagnetInfo {
         peer_info: &PeerInfo,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut peer = Peer::new(peer_info.ip.clone(), peer_info.port);
-        peer.connect().await.unwrap();
+        match peer.connect().await {
+            Ok(_) => println!(
+                "Connected to peer: {}:{}",
+                peer.peer_info.ip.clone(),
+                peer.peer_info.port
+            ),
+            Err(e) => println!(
+                "Failed to connect to peer {}:{} - {}",
+                peer.peer_info.ip.clone(),
+                peer_info.port,
+                e
+            ),
+        }
 
         let mut extension_bits = [0u8; 8];
         extension_bits[5] |= 0x10;
         let peer_id = generate_peer_id();
 
-        peer.handshake(self.info_hash, peer_id).await.unwrap();
+        match peer.handshake(self.info_hash, peer_id).await {
+            Ok(_) => println!("Handshake successful!"),
+            Err(e) => println!("Handshake failed: {}", e),
+        }
 
         let mut extension_handshake = HashMap::new();
         extension_handshake
@@ -244,6 +256,7 @@ impl MagnetInfo {
         peer.send_msg(&message).await?;
         Ok(())
     }
+    /// parses the link to extract info-hash, display-name(optiona), tracker urls and peer info!
     pub fn parse(magnet_url: &str) -> Result<MagnetInfo, Box<dyn std::error::Error>> {
         let url = Url::parse(magnet_url)?;
 
@@ -433,6 +446,8 @@ impl MagnetInfo {
 
 #[cfg(test)]
 mod tests {
+    use crate::tracker;
+
     use super::*;
     use tokio;
 
@@ -459,30 +474,51 @@ mod tests {
         let magnet = "magnet:?xt=urn:btih:12451f81a977a2d8bb402f21cd643422c5d4c50a&dn=The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
 
         let magnet_info = MagnetInfo::parse(magnet).unwrap();
-        let peer_test = vec![PeerInfo {
-            ip: "127.0.0.1".to_string(),
-            port: 6881,
-        }];
+        println!("Getting the peers from trackers...");
 
-        let results = magnet_info
-            .fetch_metadata_from_peers(&peer_test)
-            .await
-            .unwrap();
-        println!("Metadata fetched: {:?}", results);
+        let mut peers = Vec::new();
+        for tracker in &magnet_info.trackers {
+            match request_tracker(tracker, &magnet_info.info_hash, 0).await {
+                Ok(peer_vec) => {
+                    println!("Got {} number of peers from {}", peer_vec.len(), tracker);
+                    peers.extend(peer_vec);
+                }
+                Err(e) => {
+                    println!("Failed to get peers from tracker {}, {}", tracker, e);
+                    continue;
+                }
+            }
+        }
+        peers.sort_by_key(|p| (p.ip.clone(), p.port));
+        peers.dedup_by_key(|p| (p.ip.clone(), p.port));
+
+        if peers.is_empty() {
+            panic!("could not find any peers");
+        }
+        println!("Testing with {} unique peers", peers.len());
+
+        match magnet_info.fetch_metadata_from_peers(&peers).await {
+            Ok(metadata) => {
+                println!("Fetched metadata {} bytes", metadata.len());
+                assert!(!metadata.is_empty(), "Metadata should not be empty");
+            }
+            Err(e) => {
+                panic!("Failed to fetch metadata {}", e);
+            }
+        }
     }
+
     #[tokio::test]
     async fn test_magnet_download() {
-        let magnet = "magnet:?xt=urn:btih:12451f81a977a2d8bb402f21cd643422c5d4c50a&dn=The.Agency.2024.S01E05.WEB.x264-TORRENTGALAXY&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
+        let magnet = "magnet:?xt=urn:btih:c0084178f6df4d5d11f87e61f0f84c6de0c72993&dn=MomWantsToBreed%2024%2012%2020%20Alexis%20Malone%20Stepmom%20Only%20Says%20Yes%20XXX%20480p%20MP4-XXX%20[XC]&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
 
         let magnet_info = MagnetInfo::parse(magnet).expect("Failed to parse magnet link");
         println!("Successfully parsed magnet link");
         println!("Display name: {:?}", magnet_info.display_name);
         println!("Number of trackers: {}", magnet_info.trackers.len());
 
-        // Create a test output directory
         let output_dir = "./test_downloads";
 
-        // Try to download
         match magnet_info.download(output_dir).await {
             Ok(_) => println!("Download completed successfully"),
             Err(e) => {
