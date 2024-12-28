@@ -135,7 +135,6 @@ pub async fn request_udp_tracker(
     // Bind to an IPv4 address specifically
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
-    // Try to resolve the host to an IPv4 address
     let addr = match tokio::net::lookup_host((host, port)).await? {
         mut addrs => {
             let ipv4_addr = addrs
@@ -150,7 +149,6 @@ pub async fn request_udp_tracker(
         Err(_) => return Err("UDP tracker connection timeout".into()),
     }
 
-    // Step 1: Connection request with retries
     let mut retries = 2;
     let mut connection_id = None;
 
@@ -173,7 +171,6 @@ pub async fn request_udp_tracker(
 
     let connection_id = connection_id.ok_or("Failed to get connection ID after retries")?;
 
-    // Step 2: Announce request
     let transaction_id: u32 = rand::random();
     let peer_id = generate_peer_id();
 
@@ -192,7 +189,6 @@ pub async fn request_udp_tracker(
     request.extend_from_slice(&(-1_i32).to_be_bytes()); // 4 bytes - num_want
     request.extend_from_slice(&6881_u16.to_be_bytes()); // 2 bytes - port
 
-    // Try announce with retries
     retries = 2;
     while retries > 0 {
         // Send announce
@@ -231,7 +227,6 @@ pub async fn request_udp_tracker(
 
                 match action {
                     1 => {
-                        // Announce response
                         let interval = u32::from_be_bytes(response[8..12].try_into()?);
                         let leechers = u32::from_be_bytes(response[12..16].try_into()?);
                         let seeders = u32::from_be_bytes(response[16..20].try_into()?);
@@ -255,7 +250,7 @@ pub async fn request_udp_tracker(
                     2 => {
                         // Scrape response
                         println!("Got scrape response, trying announce again...");
-                        // For scrape responses, we should try the announce request again
+
                         let mut announce_request = Vec::with_capacity(98);
                         announce_request.extend_from_slice(&connection_id.to_be_bytes());
                         announce_request.extend_from_slice(&1_u32.to_be_bytes()); // Action 1 for announce
