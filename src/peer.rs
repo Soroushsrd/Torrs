@@ -31,8 +31,17 @@ impl Peer {
 
     pub async fn connect(&mut self) -> Result<(), Box<dyn Error>> {
         let address = format!("{}:{}", self.peer_info.ip, self.peer_info.port);
-        self.stream = Some(TcpStream::connect(address).await.unwrap());
-        Ok(())
+        //self.stream = Some(TcpStream::connect(&address).await.unwrap());
+        let connect_future = TcpStream::connect(&address);
+        match timeout(Duration::from_secs(10), connect_future).await {
+            Ok(Ok(stream)) => {
+                self.stream = Some(stream);
+                println!("Successfully connected to stream: {}", address);
+                Ok(())
+            }
+            Ok(Err(e)) => Err(format!("Connection error to peer {}: {}", address, e).into()),
+            Err(_) => Err(format!("Connection timeout to peer {}", address).into()),
+        }
     }
 
     pub async fn handshake(
@@ -116,7 +125,7 @@ impl Peer {
 
         let mut msg_len = [0u8; 4];
         stream.read_exact(&mut msg_len).await?;
-        let msg_len = u32::from_be_bytes(msg_len) as usize;
+        let _msg_len = u32::from_be_bytes(msg_len) as usize;
 
         let mut msg_id = [0u8; 1];
         stream.read_exact(&mut msg_id).await?;
@@ -263,8 +272,8 @@ mod tests {
                     })
                     .unwrap();
                 println!("handshake with peer done!");
-                let total_bytes = 0;
-                for (file_index, (file, file_length)) in file_struct.iter().enumerate() {
+                let _total_bytes = 0;
+                for (file_index, (file, _file_length)) in file_struct.iter().enumerate() {
                     println!("downloading file: {:?}", file.clone());
 
                     let piece_length = torrent_meta_data.get_pieces_length();
@@ -276,7 +285,8 @@ mod tests {
                         .await
                         .map_err(|e| {
                             eprintln!("Failed to download file: {:?}", e);
-                        });
+                        })
+                        .unwrap();
                     println!("downloading file: {:?} done!", file.clone());
                 }
             } else {

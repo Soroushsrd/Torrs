@@ -45,7 +45,7 @@ pub struct TorrentMetaData {
     #[serde(rename = "publisher-url")]
     publisher_url: String,
 }
-
+#[allow(dead_code)]
 impl TorrentMetaData {
     /// Reads a torrent file and maps its data to a TorrentMetaData format
     pub fn from_file(path: &str) -> Result<TorrentMetaData, serde_json::error::Error> {
