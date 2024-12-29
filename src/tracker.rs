@@ -279,6 +279,9 @@ pub async fn request_udp_tracker(
                         let retry_size = socket.recv(&mut retry_response).await?;
                         retry_response.truncate(retry_size);
 
+                        if retry_size < 20 {
+                            return Err("Retry size too short for announce".into());
+                        }
                         let retry_action = u32::from_be_bytes(retry_response[0..4].try_into()?);
                         if retry_action == 1 {
                             let mut peers = Vec::new();
@@ -348,22 +351,27 @@ pub async fn request_http_trackers(
     info_hash: &[u8; 20],
     total_length: i64,
 ) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
-    let mut url = Url::parse(announce)?;
+    let url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
-    url.query_pairs_mut()
-        .append_pair("info_hash", urlencode(info_hash).as_str())
-        .append_pair("peer_id", &String::from_utf8_lossy(&peer_id))
-        .append_pair("port", "6881")
-        .append_pair("uploaded", "0")
-        .append_pair("downloaded", "0")
-        .append_pair("left", total_length.to_string().as_str())
-        .append_pair("compact", "1")
-        .append_pair("event", "started");
+    let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",bytes_to_url_string(info_hash),bytes_to_url_string(&peer_id),total_length);
+    let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
+    println!("Requesting tracker URL: {}", &full_url);
 
-    let response = reqwest::get(url).await.unwrap().bytes().await?;
+    let response = match reqwest::get(full_url.clone()).await {
+        Ok(bytes) => match bytes.bytes().await {
+            Ok(byte) => byte,
+            Err(e) => return Err(format!("Failed to get a response: {}", e).into()),
+        },
+        Err(e) => return Err(format!("Failed to connect to {}:{}", url, e).into()),
+    };
 
-    let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)?;
+    if response.starts_with(&[b'<']) {
+        return Err("Tracker returned HTML instead of bencoded data".into());
+    }
+
+    let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)
+        .map_err(|e| format!("failed to decode the bytes {}", e))?;
 
     let peers = if !tracker_response.peer.is_empty() {
         tracker_response.peer
@@ -396,5 +404,22 @@ pub fn parse_binary_peers(binary: &[u8]) -> Vec<PeerInfo> {
 }
 /// Encodes url to a String
 fn urlencode(bytes: &[u8]) -> String {
-    bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
+    let mut encoded = String::with_capacity(bytes.len() * 3);
+    for &byte in bytes {
+        encoded.push('%');
+        encoded.push_str(&format!("{:02X}", byte));
+    }
+    encoded
+    //bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
+}
+fn bytes_to_url_string(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
+                format!("{}", b as char)
+            }
+            _ => format!("%{:02x}", b),
+        })
+        .collect()
 }
