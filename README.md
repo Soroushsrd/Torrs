@@ -20,9 +20,9 @@ graph TD
 Let's break down each of these services and their responsibilities:
 
 1. API Gateway:
-    - [] Handles external requests
-    - [] Routes requests to appropriate microservices
-    - [] Manages authentication and rate limiting
+    - [ ] Handles external requests
+    - [ ] Routes requests to appropriate microservices
+    - [ ] Manages authentication and rate limiting
 
 2. Torrent Parser Service:
     - [x] Parses .torrent files and magnet links
@@ -30,15 +30,15 @@ Let's break down each of these services and their responsibilities:
 
 3. Peer Discovery Service:
     - [x] Coordinates peer discovery methods
-    - [] Interfaces with Tracker Communication and DHT services
+    - [ ] Interfaces with Tracker Communication and DHT services
 
 4. Tracker Communication Service:
     - [x] Communicates with trackers to get peer lists
     - [x] Handles tracker protocol specifics
 
 5. DHT (Distributed Hash Table) Service:
-    - [] Implements DHT protocol for trackerless torrents
-    - [] Manages DHT node connections and queries
+    - [ ] Implements DHT protocol for trackerless torrents
+    - [ ] Manages DHT node connections and queries
 
 6. Download Manager Service:
     - [x] Orchestrates the overall download process
@@ -49,8 +49,8 @@ Let's break down each of these services and their responsibilities:
     - [x] Implements BitTorrent protocol messaging
 
 8. Piece Selection Service:
-    - [] Implements piece selection algorithms (e.g., rarest first)
-    - [] Tracks piece availability across peers
+    - [ ] Implements piece selection algorithms (e.g., rarest first)
+    - [ ] Tracks piece availability across peers
 
 9. File Storage Service:
     - [x] Handles writing downloaded pieces to disk
@@ -61,8 +61,8 @@ Let's break down each of these services and their responsibilities:
     - [x] Verifies file integrity
 
 11. User Management Service:
-    - [] Handles user accounts, if applicable
-    - [] Manages user preferences and download history
+    - [ ] Handles user accounts, if applicable
+    - [ ] Manages user preferences and download history
 
 Each of these services could be implemented as a separate microservice, potentially in different languages or using different technologies as appropriate. They would communicate via APIs, possibly using REST or gRPC.
 
