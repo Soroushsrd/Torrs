@@ -20,49 +20,49 @@ graph TD
 Let's break down each of these services and their responsibilities:
 
 1. API Gateway:
-    - Handles external requests
-    - Routes requests to appropriate microservices
-    - Manages authentication and rate limiting
+    - [] Handles external requests
+    - [] Routes requests to appropriate microservices
+    - [] Manages authentication and rate limiting
 
 2. Torrent Parser Service:
-    - Parses .torrent files and magnet links
-    - Extracts metadata (file info, trackers, piece hashes)
+    - [x] Parses .torrent files and magnet links
+    - [x] Extracts metadata (file info, trackers, piece hashes)
 
 3. Peer Discovery Service:
-    - Coordinates peer discovery methods
-    - Interfaces with Tracker Communication and DHT services
+    - [x] Coordinates peer discovery methods
+    - [] Interfaces with Tracker Communication and DHT services
 
 4. Tracker Communication Service:
-    - Communicates with trackers to get peer lists
-    - Handles tracker protocol specifics
+    - [x] Communicates with trackers to get peer lists
+    - [x] Handles tracker protocol specifics
 
 5. DHT (Distributed Hash Table) Service:
-    - Implements DHT protocol for trackerless torrents
-    - Manages DHT node connections and queries
+    - [] Implements DHT protocol for trackerless torrents
+    - [] Manages DHT node connections and queries
 
 6. Download Manager Service:
-    - Orchestrates the overall download process
-    - Manages download queues and priorities
+    - [x] Orchestrates the overall download process
+    - [x] Manages download queues and priorities
 
 7. Peer Connection Service:
-    - Establishes and manages connections to peers
-    - Implements BitTorrent protocol messaging
+    - [x] Establishes and manages connections to peers
+    - [x] Implements BitTorrent protocol messaging
 
 8. Piece Selection Service:
-    - Implements piece selection algorithms (e.g., rarest first)
-    - Tracks piece availability across peers
+    - [] Implements piece selection algorithms (e.g., rarest first)
+    - [] Tracks piece availability across peers
 
 9. File Storage Service:
-    - Handles writing downloaded pieces to disk
-    - Manages file allocation and disk space
+    - [x] Handles writing downloaded pieces to disk
+    - [x] Manages file allocation and disk space
 
 10. File Assembly Service:
-    - Assembles downloaded pieces into complete files
-    - Verifies file integrity
+    - [x] Assembles downloaded pieces into complete files
+    - [x] Verifies file integrity
 
 11. User Management Service:
-    - Handles user accounts, if applicable
-    - Manages user preferences and download history
+    - [] Handles user accounts, if applicable
+    - [] Manages user preferences and download history
 
 Each of these services could be implemented as a separate microservice, potentially in different languages or using different technologies as appropriate. They would communicate via APIs, possibly using REST or gRPC.
 
