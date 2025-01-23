@@ -1,6 +1,5 @@
 use crate::mapper::*;
 use crate::peer::PeerInfo;
-use base64::write;
 use rand::Rng;
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
@@ -47,27 +46,43 @@ pub async fn request_peers(
 
     for tracker in trackers {
         if tracker.starts_with("udp://") {
-            println!("Skipping UDP tracker: {}", tracker);
-            continue;
+            println!("Connecting to UDP tracker: {}", tracker);
+            //continue;
+            let tracker = tracker.to_string();
+            let info_hash = info_hash.clone();
+
+            let handle = task::spawn(async move {
+                match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    request_udp_tracker(&tracker, &info_hash, total_length),
+                )
+                .await
+                {
+                    Ok(Ok(peers)) => Ok((tracker, peers)),
+                    Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
+                    Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
+                }
+            });
+            handles.push(handle);
+        } else {
+            let tracker = tracker.to_string();
+            let info_hash = info_hash.clone();
+
+            let handle = task::spawn(async move {
+                match tokio::time::timeout(
+                    Duration::from_secs(10),
+                    request_http_trackers(&tracker, &info_hash, total_length),
+                )
+                .await
+                {
+                    Ok(Ok(peers)) => Ok((tracker, peers)),
+                    Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
+                    Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
+                }
+            });
+
+            handles.push(handle);
         }
-
-        let tracker = tracker.to_string();
-        let info_hash = info_hash.clone();
-
-        let handle = task::spawn(async move {
-            match tokio::time::timeout(
-                Duration::from_secs(10),
-                request_http_trackers(&tracker, &info_hash, total_length),
-            )
-            .await
-            {
-                Ok(Ok(peers)) => Ok((tracker, peers)),
-                Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
-                Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
-            }
-        });
-
-        handles.push(handle);
     }
 
     for handle in handles {
