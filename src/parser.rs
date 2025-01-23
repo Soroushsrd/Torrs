@@ -1,19 +1,9 @@
-use base64::{
-    alphabet,
-    engine::{self, general_purpose},
-    Engine as _,
-};
-use bencode_encoder::Type::Dictionary;
-use bencode_encoder::{Decoder, Encoder, Type};
 use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
 use crate::mapper::TorrentMetaData;
-
-const CUSTOM_ENGINE: engine::GeneralPurpose =
-    engine::GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::NO_PAD);
 
 /// Calculates infor hash
 pub fn calculate_info_hash(torrent_path: &str) -> Result<[u8; 20], Box<dyn std::error::Error>> {

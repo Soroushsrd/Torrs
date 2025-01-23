@@ -1,5 +1,3 @@
-use base64::engine::general_purpose;
-use base64::Engine;
 use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -88,11 +86,6 @@ impl TorrentMetaData {
     /// Gets pieces hashes stored in Info
     pub fn get_pieces_hashes(&self) -> Vec<[u8; 20]> {
         let pieces_bytes = self.info.pieces.as_ref();
-        //let base_64str = std::str::from_utf8(pieces_bytes).expect("pieces are not UTF-8 valid!");
-        //let decoded = general_purpose::STANDARD
-        //    .decode(base_64str)
-        //    .expect("failed to decode base 64 str");
-        //
         println!("length of pieces data: {}", pieces_bytes.len());
         if pieces_bytes.len() % 20 != 0 {
             panic!("The length of the pieces string is not a multiple of 20");
