@@ -10,8 +10,11 @@ use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
+use crate::mapper::TorrentMetaData;
+
 const CUSTOM_ENGINE: engine::GeneralPurpose =
     engine::GeneralPurpose::new(&alphabet::URL_SAFE, general_purpose::NO_PAD);
+
 /// Calculates infor hash
 pub fn calculate_info_hash(torrent_path: &str) -> Result<[u8; 20], Box<dyn std::error::Error>> {
     let path = Path::new(torrent_path);
@@ -19,14 +22,14 @@ pub fn calculate_info_hash(torrent_path: &str) -> Result<[u8; 20], Box<dyn std::
         return Err(format!("Input file does not exist: {}", torrent_path).into());
     }
 
-    let decoded = Decoder::decode_from(path).unwrap();
-    let info = decoded
-        .get("info".to_string())
-        .expect("Could not find the info part");
-    let info_bencoded = Encoder::encode(info).expect("Could not bencode the info values");
-    let mut hasher = Sha1::new();
+    let torrent_bytes = std::fs::read(path)?;
+    let torrent: TorrentMetaData = serde_bencode::from_bytes(&torrent_bytes)?;
 
-    hasher.update(info_bencoded);
+    // Re-encode just the info dictionary to calculate its hash
+    let info_bytes = serde_bencode::to_bytes(&torrent.info)?;
+    let mut hasher = Sha1::new();
+    hasher.update(&info_bytes);
+
     Ok(hasher.finalize().into())
 }
 
@@ -36,51 +39,62 @@ pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::E
     let input_path = Path::new(bpath);
     let output_path = Path::new(opath);
 
+    // Validate input path
     if !input_path.exists() {
         return Err(format!("Input file does not exist: {}", bpath).into());
     }
 
-    match Decoder::decode_from(bpath) {
-        Err(e) => Err(format!("Error opening or decoding file: {}", e).into()),
-        Ok(mut t) => {
-            println!("Successfully decoded torrent file");
-            println!("Type of decoded content: {:?}", t);
-
-            if let Dictionary(ref mut dict) = t {
-                if let Some(Dictionary(info_dict)) = dict.get_mut("info") {
-                    if let Some(pieces) = info_dict.get_mut("pieces") {
-                        if let Type::ByteString(ref pieces_bytes) = pieces {
-                            let pieces_base64 = general_purpose::STANDARD.encode(pieces_bytes);
-                            println!(
-                                "Base64 encoded pieces (first 100 chars): {}",
-                                &pieces_base64[..100.min(pieces_base64.len())]
-                            );
-
-                            *pieces = Type::ByteString(pieces_base64.into());
-                        } else {
-                            println!("Pieces entry is not a byte string");
-                        }
-                    } else {
-                        println!("No pieces entry found in the dictionary");
-                    }
-                } else {
-                    println!("Decoded content is not a dictionary");
-                }
-            }
-
-            let json_content = serde_json::to_string_pretty(&t)?;
-            match File::create(output_path) {
-                Ok(mut file) => match file.write_all(json_content.as_bytes()) {
-                    Ok(_) => {
-                        println!("Decoded to json file at: {}", opath);
-                        Ok(())
-                    }
-                    Err(e) => Err(format!("Error writing to file: {}", e).into()),
-                },
-                Err(e) => Err(format!("Error creating output file: {}", e).into()),
-            }
+    // Validate output directory exists
+    if let Some(parent) = output_path.parent() {
+        if !parent.exists() {
+            return Err(format!("Output directory does not exist: {}", parent.display()).into());
         }
     }
+
+    // Read torrent file
+    let torrent_bytes = std::fs::read(input_path).map_err(|e| {
+        format!(
+            "Failed to read torrent file {}: {}",
+            input_path.display(),
+            e
+        )
+    })?;
+
+    // Decode bencode to your existing TorrentMetaData struct
+    let torrent: TorrentMetaData = serde_bencode::from_bytes(&torrent_bytes).map_err(|e| {
+        format!(
+            "Failed to decode bencode from {}: {}",
+            input_path.display(),
+            e
+        )
+    })?;
+
+    // Convert to JSON
+    let json_content = serde_json::to_string_pretty(&torrent)
+        .map_err(|e| format!("Failed to serialize torrent data to JSON: {}", e))?;
+
+    // Write to output file
+    let mut file = File::create(output_path).map_err(|e| {
+        format!(
+            "Failed to create output file {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+
+    file.write_all(json_content.as_bytes()).map_err(|e| {
+        format!(
+            "Failed to write JSON content to {}: {}",
+            output_path.display(),
+            e
+        )
+    })?;
+
+    println!(
+        "Successfully decoded torrent file to JSON at: {}",
+        output_path.display()
+    );
+    Ok(())
 }
 
 #[cfg(test)]

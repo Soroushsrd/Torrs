@@ -1,5 +1,8 @@
+use base64::engine::general_purpose;
+use base64::Engine;
 use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use serde_json;
 use sha1::Digest;
 use sha1::Sha1;
@@ -21,7 +24,8 @@ pub struct TorrentInfo {
     pub name: String,
     #[serde(rename = "piece length")]
     pub piece_length: i64,
-    pub pieces: String,
+    #[serde(with = "serde_bytes")]
+    pub pieces: ByteBuf,
     pub files: Option<Vec<TorrentFile>>,
     pub length: Option<i64>, //  optional
     #[serde(default)]
@@ -39,11 +43,11 @@ pub struct TorrentMetaData {
     created_by: String,
     #[serde(rename = "creation date")]
     creation_date: i64,
-    encoding: String,
-    info: TorrentInfo,
-    publisher: String,
+    encoding: Option<String>,
+    pub info: TorrentInfo,
+    publisher: Option<String>,
     #[serde(rename = "publisher-url")]
-    publisher_url: String,
+    publisher_url: Option<String>,
 }
 #[allow(dead_code)]
 impl TorrentMetaData {
@@ -83,13 +87,17 @@ impl TorrentMetaData {
 
     /// Gets pieces hashes stored in Info
     pub fn get_pieces_hashes(&self) -> Vec<[u8; 20]> {
-        let pieces_bytes = self.info.pieces.as_bytes();
+        let pieces_bytes = self.info.pieces.as_ref();
+        //let base_64str = std::str::from_utf8(pieces_bytes).expect("pieces are not UTF-8 valid!");
+        //let decoded = general_purpose::STANDARD
+        //    .decode(base_64str)
+        //    .expect("failed to decode base 64 str");
+        //
+        println!("length of pieces data: {}", pieces_bytes.len());
         if pieces_bytes.len() % 20 != 0 {
             panic!("The length of the pieces string is not a multiple of 20");
         }
-        self.info
-            .pieces
-            .as_bytes()
+        pieces_bytes
             .chunks(20)
             .map(|chunk| {
                 let mut hash = [0u8; 20];
@@ -134,14 +142,14 @@ mod tests {
 
     #[test]
     fn test_from_file() {
-        let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
         let result = TorrentMetaData::from_file(path).unwrap();
         println!("torrent file publishe: {:?}", result.publisher)
     }
 
     #[test]
     fn test_get_pieces_lengthl() {
-        let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let pieces_length = result.get_pieces_length();
         println!("pieces length: {:?}", pieces_length);
