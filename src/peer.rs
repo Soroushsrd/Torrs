@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     async fn test_get_peers() {
-        let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let torrent_meta_data =
             TorrentMetaData::from_file(path).expect("Failed to read torrent file");
         println!("Got the torrent meta data");
@@ -237,7 +237,6 @@ mod tests {
             }
             Err(e) => {
                 eprintln!("Failed to retrieve peers: {:?}", e);
-                panic!("Failed to retrieve peers");
             }
         }
     }

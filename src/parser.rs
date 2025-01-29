@@ -94,8 +94,8 @@ mod tests {
     #[test]
     fn test_decode_json() {
         decode_json(
-            "C:\\Users\\Lenovo\\Downloads\\Gym Manager [FitGirl Repack].torrent",
-            "C:\\Users\\Lenovo\\Downloads\\Gym Manager [FitGirl Repack].json",
+            r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent",
+            r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json",
         )
         .unwrap();
     }

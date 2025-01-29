@@ -148,7 +148,7 @@ pub async fn request_udp_tracker(
     let port = url.port().unwrap_or(80);
 
     // Bind to an IPv4 address specifically
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:6881").await?;
 
     let addr = match tokio::net::lookup_host((host, port)).await? {
         mut addrs => {
@@ -307,7 +307,9 @@ pub async fn request_udp_tracker(
                                         chunk[0], chunk[1], chunk[2], chunk[3]
                                     );
                                     let port = u16::from_be_bytes([chunk[4], chunk[5]]);
-                                    peers.push(PeerInfo { ip, port });
+                                    if &ip != "0.0.0.0" && port != 0 {
+                                        peers.push(PeerInfo { ip, port });
+                                    }
                                 }
                             }
                             return Ok(peers);
@@ -387,7 +389,7 @@ pub async fn request_http_trackers(
 
     let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)
         .map_err(|e| format!("failed to decode the bytes {}", e))?;
-
+    println!("Tracker Response: {:?}", &tracker_response);
     let peers = if !tracker_response.peer.is_empty() {
         tracker_response.peer
     } else if let Some(binary_peer) = tracker_response.peers_binary {
@@ -427,7 +429,7 @@ fn urlencode(bytes: &[u8]) -> String {
     encoded
     //bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
 }
-fn bytes_to_url_string(bytes: &[u8]) -> String {
+pub fn bytes_to_url_string(bytes: &[u8]) -> String {
     bytes
         .iter()
         .map(|&b| match b {

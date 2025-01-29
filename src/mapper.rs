@@ -131,18 +131,20 @@ impl TorrentMetaData {
 
 #[cfg(test)]
 mod tests {
+    use crate::{parser::calculate_info_hash, tracker::bytes_to_url_string};
+
     use super::*;
 
     #[test]
     fn test_from_file() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         println!("torrent file publishe: {:?}", result.publisher)
     }
 
     #[test]
     fn test_get_pieces_lengthl() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let pieces_length = result.get_pieces_length();
         println!("pieces length: {:?}", pieces_length);
@@ -150,7 +152,7 @@ mod tests {
 
     #[test]
     fn test_get_file_structure() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let file_structure = result.get_file_structure();
         println!("file structure: {:?}", file_structure);
@@ -160,7 +162,7 @@ mod tests {
     }
     #[test]
     fn test_get_tracker_url() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let tracker_url = result.get_tracker_url();
         println!("Tracker url:{:?}", tracker_url);
@@ -168,7 +170,7 @@ mod tests {
 
     #[test]
     fn test_get_total_size() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let total_size = result.get_total_size();
         println!("total_size: {:?}", total_size);
@@ -176,16 +178,26 @@ mod tests {
 
     #[test]
     fn test_get_pieces_hashes() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let pieces_hashes = result.get_pieces_hashes();
         println!("pieces_hashes: {:?}", pieces_hashes);
     }
     #[test]
     fn test_hash_info() {
-        let path = r"C:\Users\Lenovo\Downloads\Gym Manager [FitGirl Repack].json";
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let result = TorrentMetaData::from_file(path).unwrap();
         let info_hash = result.calculate_info_hash().unwrap();
         println!("info_hashes: {:?}", info_hash);
+    }
+    #[tokio::test]
+    async fn debug_info_hash() {
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
+        let torrent_meta_data =
+            TorrentMetaData::from_file(path).expect("Failed to read torrent file");
+
+        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+        println!("Raw info hash bytes: {:?}", info_hash);
+        println!("URL encoded info hash: {}", bytes_to_url_string(&info_hash));
     }
 }
