@@ -119,9 +119,7 @@ impl MagnetInfo {
         }
 
         let mut extension_handshake = HashMap::new();
-        extension_handshake
-            .insert("ut_metadata".to_string(), METADATA_EXTENSION_ID as i64)
-            .unwrap();
+        extension_handshake.insert("ut_metadata".to_string(), METADATA_EXTENSION_ID as i64);
 
         let mut handshake_msg = ExtensionHandshake {
             m: extension_handshake,
@@ -130,6 +128,7 @@ impl MagnetInfo {
         };
 
         let handshake_bytes = serde_bencode::to_bytes(&mut handshake_msg).unwrap();
+        println!("Handshake Bytes: {:?}", handshake_bytes.clone());
         self.send_extension_message(&mut peer, EXTENSION_HANDSHAKE_ID as u8, &handshake_bytes)
             .await?;
 
