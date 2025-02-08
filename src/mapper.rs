@@ -152,6 +152,19 @@ mod tests {
 
     use super::*;
 
+    macro_rules! test_torrent {
+        ($name:ident,$method:ident) => {
+            #[test]
+            fn $name() {
+                let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+                let result = TorrentMetaData::from_trnt_file(path).unwrap();
+                let output = result.$method();
+
+                println!("{}: {:?}", stringify!($method), output);
+            }
+        };
+    }
+
     #[test]
     fn test_from_file() {
         let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
@@ -159,54 +172,12 @@ mod tests {
         println!("torrent file publishe: {:?}", result.publisher)
     }
 
-    #[test]
-    fn test_get_pieces_lengthl() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let pieces_length = result.get_pieces_length();
-        println!("pieces length: {:?}", pieces_length);
-    }
-
-    #[test]
-    fn test_get_file_structure() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let file_structure = result.get_file_structure();
-        println!("file structure: {:?}", file_structure);
-        for file in file_structure {
-            println!("files seperately:{:?}", file.0)
-        }
-    }
-    #[test]
-    fn test_get_tracker_url() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let tracker_url = result.get_tracker_url();
-        println!("Tracker url:{:?}", tracker_url);
-    }
-
-    #[test]
-    fn test_get_total_size() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let total_size = result.get_total_size();
-        println!("total_size: {:?}", total_size);
-    }
-
-    #[test]
-    fn test_get_pieces_hashes() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let pieces_hashes = result.get_pieces_hashes();
-        println!("pieces_hashes: {:?}", pieces_hashes[10]);
-    }
-    #[test]
-    fn test_hash_info() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        let info_hash = result.calculate_info_hash().unwrap();
-        println!("info_hashes length: {:?}", info_hash.len());
-    }
+    test_torrent!(test_get_pieces_length, get_pieces_length);
+    test_torrent!(test_get_file_structure, get_file_structure);
+    test_torrent!(test_get_tracker_url, get_tracker_url);
+    test_torrent!(test_get_total_size, get_total_size);
+    test_torrent!(test_get_pieces_hashes, get_pieces_hashes);
+    test_torrent!(test_hash_info, calculate_info_hash);
     #[tokio::test]
     async fn debug_info_hash() {
         let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
