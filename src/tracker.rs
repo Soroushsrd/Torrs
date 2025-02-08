@@ -371,7 +371,7 @@ pub async fn request_http_trackers(
     let url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
-    let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",bytes_to_url_string(info_hash),bytes_to_url_string(&peer_id),total_length);
+    let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",urlencode(info_hash),urlencode(&peer_id),total_length);
     let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
     println!("Requesting tracker URL: {}", &full_url);
 
@@ -420,14 +420,14 @@ pub fn parse_binary_peers(binary: &[u8]) -> Vec<PeerInfo> {
         .collect()
 }
 /// Encodes url to a String
-fn urlencode(bytes: &[u8]) -> String {
-    let mut encoded = String::with_capacity(bytes.len() * 3);
-    for &byte in bytes {
-        encoded.push('%');
-        encoded.push_str(&format!("{:02X}", byte));
-    }
-    encoded
-    //bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
+pub fn urlencode(bytes: &[u8]) -> String {
+    // let mut encoded = String::with_capacity(bytes.len() * 3);
+    // for &byte in bytes {
+    //     encoded.push('%');
+    //     encoded.push_str(&format!("{:02X}", byte));
+    // }
+    // encoded
+    bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
 }
 pub fn bytes_to_url_string(bytes: &[u8]) -> String {
     bytes

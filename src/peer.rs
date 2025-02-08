@@ -224,7 +224,7 @@ mod tests {
     async fn test_get_peers() {
         let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
         let torrent_meta_data =
-            TorrentMetaData::from_file(path).expect("Failed to read torrent file");
+            TorrentMetaData::from_json_file(path).expect("Failed to read torrent file");
         println!("Got the torrent meta data");
 
         match request_peers(&torrent_meta_data).await {
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     async fn test_download() {
         let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
-        let torrent_meta_data = TorrentMetaData::from_file(path).unwrap();
+        let torrent_meta_data = TorrentMetaData::from_json_file(path).unwrap();
         println!("got the torrent meta data");
 
         let peers = request_peers(&torrent_meta_data).await.unwrap();
