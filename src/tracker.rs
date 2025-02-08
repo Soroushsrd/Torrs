@@ -33,6 +33,7 @@ pub fn generate_peer_id() -> [u8; 20] {
 
     peer_id
 }
+//TODO: Request peers doesnt work. check the message strucutre!
 
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
 pub async fn request_peers(
@@ -53,7 +54,7 @@ pub async fn request_peers(
 
             let handle = task::spawn(async move {
                 match tokio::time::timeout(
-                    Duration::from_secs(10),
+                    Duration::from_secs(20),
                     request_udp_tracker(&tracker, &info_hash, total_length),
                 )
                 .await
@@ -70,7 +71,7 @@ pub async fn request_peers(
 
             let handle = task::spawn(async move {
                 match tokio::time::timeout(
-                    Duration::from_secs(10),
+                    Duration::from_secs(20),
                     request_http_trackers(&tracker, &info_hash, total_length),
                 )
                 .await
@@ -371,7 +372,9 @@ pub async fn request_http_trackers(
     let url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
+    println!("Raw info_hash bytes: {:?}", info_hash);
     let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",urlencode(info_hash),urlencode(&peer_id),total_length);
+    let url = transform_tracker_url(url.as_str());
     let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
     println!("Requesting tracker URL: {}", &full_url);
 
@@ -419,6 +422,9 @@ pub fn parse_binary_peers(binary: &[u8]) -> Vec<PeerInfo> {
         })
         .collect()
 }
+
+// TODO: url encoding should be modified
+
 /// Encodes url to a String
 pub fn urlencode(bytes: &[u8]) -> String {
     // let mut encoded = String::with_capacity(bytes.len() * 3);
@@ -427,7 +433,20 @@ pub fn urlencode(bytes: &[u8]) -> String {
     //     encoded.push_str(&format!("{:02X}", byte));
     // }
     // encoded
-    bytes.iter().map(|&b| format!("%{:02X}", b)).collect()
+    bytes
+        .iter()
+        .map(|&b| format!("%{:02x}", b))
+        .collect::<String>()
+}
+pub fn transform_tracker_url(announce: &str) -> String {
+    let mut url = announce.to_string();
+
+    url = url.replace("https://", "http://");
+    if !url.contains(":6969") {
+        url = url.replace("/announce", ":6969/announce");
+    }
+    println!("refined tracker url: {}", url);
+    url
 }
 pub fn bytes_to_url_string(bytes: &[u8]) -> String {
     bytes
