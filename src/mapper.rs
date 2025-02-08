@@ -49,8 +49,8 @@ pub struct TorrentMetaData {
 }
 #[allow(dead_code)]
 impl TorrentMetaData {
-    /// Reads a torrent file and maps its data to a TorrentMetaData format
-    pub fn from_file(path: &str) -> Result<TorrentMetaData, serde_json::error::Error> {
+    /// Reads a json file and maps its data to a TorrentMetaData format
+    pub fn from_json_file(path: &str) -> Result<TorrentMetaData, serde_json::error::Error> {
         let file_path = Path::new(path);
         let file = File::open(file_path).expect("Could not open the file");
         let reader = BufReader::new(file);
@@ -58,6 +58,23 @@ impl TorrentMetaData {
         let torrent_meta_data =
             serde_json::from_reader(reader).expect("serde could not read the buffer");
         Ok(torrent_meta_data)
+    }
+
+    /// Reads a torrent file and maps ints data to a TorrentMetaData format
+    pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData, serde_bencode::error::Error> {
+        let file_path = Path::new(path);
+        // let file = File::open(file_path).expect("failed to open the file");
+        let bytes = std::fs::read(file_path).expect("failed to read the file");
+        let torrent: TorrentMetaData = serde_bencode::from_bytes(&bytes)
+            .map_err(|e| {
+                format!(
+                    "Failed to decode bencode from {}: {}",
+                    file_path.display(),
+                    e
+                )
+            })
+            .unwrap();
+        Ok(torrent)
     }
 
     /// gets tracker urls
@@ -131,29 +148,29 @@ impl TorrentMetaData {
 
 #[cfg(test)]
 mod tests {
-    use crate::{parser::calculate_info_hash, tracker::bytes_to_url_string};
+    use crate::tracker::{bytes_to_url_string, urlencode};
 
     use super::*;
 
     #[test]
     fn test_from_file() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         println!("torrent file publishe: {:?}", result.publisher)
     }
 
     #[test]
     fn test_get_pieces_lengthl() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let pieces_length = result.get_pieces_length();
         println!("pieces length: {:?}", pieces_length);
     }
 
     #[test]
     fn test_get_file_structure() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let file_structure = result.get_file_structure();
         println!("file structure: {:?}", file_structure);
         for file in file_structure {
@@ -162,42 +179,45 @@ mod tests {
     }
     #[test]
     fn test_get_tracker_url() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let tracker_url = result.get_tracker_url();
         println!("Tracker url:{:?}", tracker_url);
     }
 
     #[test]
     fn test_get_total_size() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let total_size = result.get_total_size();
         println!("total_size: {:?}", total_size);
     }
 
     #[test]
     fn test_get_pieces_hashes() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let pieces_hashes = result.get_pieces_hashes();
-        println!("pieces_hashes: {:?}", pieces_hashes);
+        println!("pieces_hashes: {:?}", pieces_hashes[10]);
     }
     #[test]
     fn test_hash_info() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let result = TorrentMetaData::from_file(path).unwrap();
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let result = TorrentMetaData::from_trnt_file(path).unwrap();
         let info_hash = result.calculate_info_hash().unwrap();
-        println!("info_hashes: {:?}", info_hash);
+        println!("info_hashes length: {:?}", info_hash.len());
     }
     #[tokio::test]
     async fn debug_info_hash() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json";
-        let torrent_meta_data =
-            TorrentMetaData::from_file(path).expect("Failed to read torrent file");
+        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
 
         let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-        println!("Raw info hash bytes: {:?}", info_hash);
+        // println!("Raw info hash bytes: {:?}", info_hash);
         println!("URL encoded info hash: {}", bytes_to_url_string(&info_hash));
+        println!(
+            "Url encoded info hash using earlier funct: {}",
+            urlencode(&info_hash)
+        );
     }
 }
