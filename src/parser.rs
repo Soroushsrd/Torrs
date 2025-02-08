@@ -5,24 +5,6 @@ use std::path::Path;
 
 use crate::mapper::TorrentMetaData;
 
-/// Calculates infor hash
-pub fn calculate_info_hash(torrent_path: &str) -> Result<[u8; 20], Box<dyn std::error::Error>> {
-    let path = Path::new(torrent_path);
-    if !path.exists() {
-        return Err(format!("Input file does not exist: {}", torrent_path).into());
-    }
-
-    let torrent_bytes = std::fs::read(path)?;
-    let torrent: TorrentMetaData = serde_bencode::from_bytes(&torrent_bytes)?;
-
-    // Re-encode just the info dictionary to calculate its hash
-    let info_bytes = serde_bencode::to_bytes(&torrent.info)?;
-    let mut hasher = Sha1::new();
-    hasher.update(&info_bytes);
-
-    Ok(hasher.finalize().into())
-}
-
 // fix the pieces part!
 /// Decodes the torrent file as a json
 pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::Error>> {
