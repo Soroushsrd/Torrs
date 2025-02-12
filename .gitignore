@@ -5,3 +5,6 @@
 Cargo.lock
 
 .vscode/
+*.torrent
+*.Identifier
+*.bin
