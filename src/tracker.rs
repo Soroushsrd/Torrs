@@ -29,11 +29,10 @@ pub fn generate_peer_id() -> [u8; 20] {
     rng.fill(&mut peer_id);
 
     peer_id[0] = b'-';
-    peer_id[1..6].copy_from_slice(b"RU001");
+    peer_id[1..7].copy_from_slice(b"TR2940");
 
     peer_id
 }
-//TODO: Request peers doesnt work. check the message strucutre!
 
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
 pub async fn request_peers(
@@ -149,7 +148,7 @@ pub async fn request_udp_tracker(
     let port = url.port().unwrap_or(80);
 
     // Bind to an IPv4 address specifically
-    let socket = tokio::net::UdpSocket::bind("0.0.0.0:6881").await?;
+    let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
     let addr = match tokio::net::lookup_host((host, port)).await? {
         mut addrs => {
@@ -192,7 +191,7 @@ pub async fn request_udp_tracker(
 
     let mut request = Vec::with_capacity(98);
     request.extend_from_slice(&connection_id.to_be_bytes()); // 8 bytes
-    request.extend_from_slice(&2_u32.to_be_bytes()); // 4 bytes - action (2 for announce)
+    request.extend_from_slice(&1_u32.to_be_bytes()); // 4 bytes - action (1 for announce)
     request.extend_from_slice(&transaction_id.to_be_bytes()); // 4 bytes
     request.extend_from_slice(info_hash); // 20 bytes
     request.extend_from_slice(&peer_id); // 20 bytes
@@ -226,7 +225,7 @@ pub async fn request_udp_tracker(
         match timeout(UDP_TIMEOUT, socket.recv(&mut response)).await {
             Ok(Ok(size)) => {
                 response.truncate(size);
-                if size < 20 {
+                if size < 8 {
                     println!("Response too short: {} bytes", size);
                     retries -= 1;
                     continue;
@@ -234,6 +233,11 @@ pub async fn request_udp_tracker(
 
                 let action = u32::from_be_bytes(response[0..4].try_into()?);
                 let resp_transaction_id = u32::from_be_bytes(response[4..8].try_into()?);
+                println!(
+                    "Response action: {}, transaction_id: {}",
+                    action, resp_transaction_id
+                );
+                println!("First 20 bytes: {:?}", &response[..20.min(size)]);
 
                 if resp_transaction_id != transaction_id {
                     println!("Transaction ID mismatch");
@@ -372,7 +376,12 @@ pub async fn request_http_trackers(
     let url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
-    let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",urlencode(info_hash),urlencode(&peer_id),total_length);
+    let q = format!(
+        "?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&compact=1&left={}",
+        urlencode(info_hash),
+        urlencode(&peer_id),
+        total_length
+    );
     // let url = transform_tracker_url(url.as_str());
     let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
 
@@ -387,11 +396,9 @@ pub async fn request_http_trackers(
     if response.starts_with(&[b'<']) {
         return Err("Tracker returned HTML instead of bencoded data".into());
     }
-    println!("raw response: {:?}", response);
 
     let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)
         .map_err(|e| format!("failed to decode the bytes {}", e))?;
-    println!("Tracker Response: {:?}", &tracker_response);
     let peers = if !tracker_response.peer.is_empty() {
         tracker_response.peer
     } else if let Some(binary_peer) = tracker_response.peers_binary {
@@ -438,4 +445,66 @@ pub fn transform_tracker_url(announce: &str) -> String {
     }
     println!("refined tracker url: {}", url);
     url
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    #[tokio::test]
+    async fn test_request_http_tracker() {
+        let path = r"/home/rusty/Rs/Torrs/The.Agency.2024.S01E09.WEB.x264-TORRENTGALAXY.torrent";
+
+        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+        println!("Got the torrent meta data");
+
+        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+        let trackers = torrent_meta_data.get_tracker_url();
+        let total_length = torrent_meta_data.get_total_size();
+
+        let mut any_success = false;
+
+        for tracker in trackers {
+            println!("\nTrying tracker: {}", tracker);
+            let result = if tracker.starts_with("udp") {
+                match request_udp_tracker(&tracker, &info_hash, total_length).await {
+                    Ok(peers) => {
+                        println!("Successfully got {} peers from UDP tracker", peers.len());
+                        any_success = true;
+                        Ok(peers)
+                    }
+                    Err(e) => {
+                        println!("UDP tracker failed: {}", e);
+                        Err(e)
+                    }
+                }
+            } else {
+                match request_http_trackers(&tracker, &info_hash, total_length).await {
+                    Ok(peers) => {
+                        println!("Successfully got {} peers from HTTP tracker", peers.len());
+                        any_success = true;
+                        Ok(peers)
+                    }
+                    Err(e) => {
+                        println!("HTTP tracker failed: {}", e);
+                        Err(e)
+                    }
+                }
+            };
+
+            // Print peer info if successful
+            if let Ok(peers) = result {
+                println!("First 5 peers from tracker {}:", tracker);
+                for (i, peer) in peers.iter().take(5).enumerate() {
+                    println!("  Peer {}: {}:{}", i + 1, peer.ip, peer.port);
+                }
+                if peers.len() > 5 {
+                    println!("  ... and {} more peers", peers.len() - 5);
+                }
+            }
+        }
+
+        // Test passes if at least one tracker worked
+        assert!(any_success, "No trackers successfully returned peers");
+    }
 }
