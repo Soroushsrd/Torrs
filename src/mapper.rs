@@ -148,7 +148,7 @@ impl TorrentMetaData {
 
 #[cfg(test)]
 mod tests {
-    use crate::tracker::{bytes_to_url_string, urlencode};
+    use crate::tracker::urlencode;
 
     use super::*;
 
@@ -185,7 +185,7 @@ mod tests {
 
         let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
         // println!("Raw info hash bytes: {:?}", info_hash);
-        println!("URL encoded info hash: {}", bytes_to_url_string(&info_hash));
+        println!("URL encoded info hash: {}", urlencode(&info_hash));
         println!(
             "Url encoded info hash using earlier funct: {}",
             urlencode(&info_hash)

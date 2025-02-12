@@ -18,8 +18,6 @@ pub struct Peer {
     stream: Option<TcpStream>,
 }
 
-pub const PROTOCOL: &str = "BitTorrent protocol";
-
 impl Peer {
     pub fn new(ip: String, port: u16) -> Self {
         let peer_info = PeerInfo { ip, port };

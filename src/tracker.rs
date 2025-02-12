@@ -372,11 +372,9 @@ pub async fn request_http_trackers(
     let url = Url::parse(announce)?;
     let peer_id = generate_peer_id();
 
-    println!("Raw info_hash bytes: {:?}", info_hash);
     let q = format!("?info_hash={}&peer_id={}&port=6881&uploaded=0&downloaded=0&left={}&compact=1&event=started",urlencode(info_hash),urlencode(&peer_id),total_length);
-    let url = transform_tracker_url(url.as_str());
+    // let url = transform_tracker_url(url.as_str());
     let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
-    println!("Requesting tracker URL: {}", &full_url);
 
     let response = match reqwest::get(full_url.clone()).await {
         Ok(bytes) => match bytes.bytes().await {
@@ -389,6 +387,7 @@ pub async fn request_http_trackers(
     if response.starts_with(&[b'<']) {
         return Err("Tracker returned HTML instead of bencoded data".into());
     }
+    println!("raw response: {:?}", response);
 
     let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)
         .map_err(|e| format!("failed to decode the bytes {}", e))?;
@@ -423,16 +422,8 @@ pub fn parse_binary_peers(binary: &[u8]) -> Vec<PeerInfo> {
         .collect()
 }
 
-// TODO: url encoding should be modified
-
 /// Encodes url to a String
 pub fn urlencode(bytes: &[u8]) -> String {
-    // let mut encoded = String::with_capacity(bytes.len() * 3);
-    // for &byte in bytes {
-    //     encoded.push('%');
-    //     encoded.push_str(&format!("{:02X}", byte));
-    // }
-    // encoded
     bytes
         .iter()
         .map(|&b| format!("%{:02x}", b))
@@ -442,20 +433,9 @@ pub fn transform_tracker_url(announce: &str) -> String {
     let mut url = announce.to_string();
 
     url = url.replace("https://", "http://");
-    if !url.contains(":6969") {
+    if !url.contains(":6881") {
         url = url.replace("/announce", ":6969/announce");
     }
     println!("refined tracker url: {}", url);
     url
-}
-pub fn bytes_to_url_string(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => {
-                format!("{}", b as char)
-            }
-            _ => format!("%{:02x}", b),
-        })
-        .collect()
 }

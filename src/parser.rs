@@ -1,4 +1,3 @@
-use sha1::{Digest, Sha1};
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -7,6 +6,7 @@ use crate::mapper::TorrentMetaData;
 
 // fix the pieces part!
 /// Decodes the torrent file as a json
+#[allow(dead_code)]
 pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::Error>> {
     let input_path = Path::new(bpath);
     let output_path = Path::new(opath);
