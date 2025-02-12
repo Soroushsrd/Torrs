@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::time::Duration;
 use tokio::fs::File;
+use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
@@ -16,6 +17,114 @@ pub struct PeerInfo {
 pub struct Peer {
     pub peer_info: PeerInfo,
     stream: Option<TcpStream>,
+    pub bitfields: Option<Vec<u8>>,
+    pub is_choked: bool,
+    pub is_interested: bool,
+}
+
+#[derive(Debug)]
+pub struct PieceDownloader {
+    pub peers: Vec<Peer>,
+    pub current_peer_idx: usize,
+    pub hash_info: [u8; 20],
+    pub peer_id: [u8; 20],
+}
+
+impl PieceDownloader {
+    pub fn new(peers: Vec<PeerInfo>, info_hash: [u8; 20], peer_id: [u8; 20]) -> Self {
+        let peers = peers
+            .into_iter()
+            .map(|peer_info| Peer {
+                peer_info,
+                stream: None,
+                bitfields: None,
+                is_choked: true,
+                is_interested: false,
+            })
+            .collect();
+
+        PieceDownloader {
+            peers,
+            current_peer_idx: 0,
+            hash_info: info_hash,
+            peer_id,
+        }
+    }
+    async fn try_next_peer(&mut self) -> Result<(), Box<dyn Error>> {
+        let mut attempts = 0;
+        let max_attempts = self.peers.len();
+
+        while attempts < max_attempts {
+            self.current_peer_idx = (self.current_peer_idx + 1) % self.peers.len();
+            attempts += 1;
+
+            let peer = &mut self.peers[self.current_peer_idx];
+            match peer.connect().await {
+                Ok(()) => {
+                    println!(
+                        "Connected to new peer {}:{}",
+                        peer.peer_info.ip, peer.peer_info.port
+                    );
+                    match peer.handshake(self.hash_info, self.peer_id).await {
+                        Ok(()) => match peer.receive_init_msg().await {
+                            Ok(()) => return Ok(()),
+                            Err(e) => println!("Failed to receive initial messages: {}", e),
+                        },
+                        Err(e) => println!("Failed handshake: {}", e),
+                    }
+                }
+                Err(e) => println!("Failed to connect to peer: {}", e),
+            }
+        }
+
+        Err("No more peers available".into())
+    }
+    pub async fn download_piece(
+        &mut self,
+        index: u32,
+        piece_length: u32,
+        file_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut offset = 0;
+        let mut retries_with_same_peer = 0;
+        const MAX_RETRIES_PER_PEER: i32 = 2;
+
+        while offset < piece_length {
+            let peer = &mut self.peers[self.current_peer_idx];
+            match peer
+                .request_piece(index, piece_length, offset, file_path)
+                .await
+            {
+                Ok(bytes_downloaded) => {
+                    offset += bytes_downloaded;
+                    retries_with_same_peer = 0;
+                    if offset >= piece_length {
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    println!(
+                        "Error downloading from peer: {}:{}",
+                        peer.peer_info.ip, peer.peer_info.port
+                    );
+                    retries_with_same_peer += 1;
+                    if retries_with_same_peer >= MAX_RETRIES_PER_PEER {
+                        println!(
+                            "Switching to the next peer after {} retries",
+                            retries_with_same_peer
+                        );
+                        match self.try_next_peer().await {
+                            Ok(()) => retries_with_same_peer = 0,
+                            Err(e) => return Err(e),
+                        }
+                    } else {
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Peer {
@@ -24,6 +133,9 @@ impl Peer {
         Peer {
             peer_info,
             stream: None,
+            bitfields: None,
+            is_choked: true,
+            is_interested: false,
         }
     }
 
@@ -60,8 +172,6 @@ impl Peer {
         handshake_msg.extend_from_slice(&info_hash);
         handshake_msg.extend_from_slice(&peer_id);
 
-        println!("Sending handshake, length: {}", handshake_msg.len());
-
         // Send handshake with timeout
         match timeout(Duration::from_secs(4), stream.write_all(&handshake_msg)).await {
             Ok(result) => result?,
@@ -79,65 +189,155 @@ impl Peer {
 
         println!("Handshake response received!");
         if response[0] != 19 || &response[1..20] != b"BitTorrent protocol" {
-            return Err("Invalid Handshake Response!".into());
+            return Err(format!("Invalid Handshake Response! Got: {:?}", &response[..20]).into());
         }
 
-        let peer_info_hash = &response[20..48];
+        let peer_info_hash = &response[28..48];
         if peer_info_hash != info_hash {
-            return Err("Info-Hash Mismatch!".into());
+            return Err(format!(
+                "Info hash mismatch.\nExpected: {:02x?}\nReceived: {:02x?}",
+                info_hash, peer_info_hash
+            )
+            .into());
         }
 
         Ok(())
     }
 
+    pub async fn receive_init_msg(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut got_bitfield = false;
+        let start_time = std::time::Instant::now();
+        let timeout_duration = std::time::Duration::from_secs(30);
+
+        while !got_bitfield && start_time.elapsed() < timeout_duration {
+            let mut msg_len = [0u8; 4];
+            let stream = self.stream.as_mut().ok_or("No stream available")?;
+            stream.read_exact(&mut msg_len).await?;
+            let msg_len = u32::from_be_bytes(msg_len) as usize;
+
+            // Handle keep-alive message
+            if msg_len == 0 {
+                println!("Received keep-alive");
+                continue;
+            }
+
+            let mut msg_id = [0u8; 1];
+            stream.read_exact(&mut msg_id).await?;
+
+            println!("Received message type: {}", msg_id[0]);
+
+            match msg_id[0] {
+                0 => println!("Peer sent choke"),
+                1 => println!("Peer sent unchoke"),
+                2 => println!("Peer sent interested"),
+                3 => println!("Peer sent not interested"),
+                4 => {
+                    // Have message
+                    let mut have = [0u8; 4];
+                    stream.read_exact(&mut have).await?;
+                    println!(
+                        "Received have message for piece {}",
+                        u32::from_be_bytes(have)
+                    );
+                }
+                5 => {
+                    // Bitfield
+                    let mut bitfield = vec![0u8; msg_len - 1];
+                    stream.read_exact(&mut bitfield).await?;
+                    println!("Received bitfield of length {}", bitfield.len());
+                    self.bitfields = Some(bitfield);
+                    got_bitfield = true;
+                }
+                _ => {
+                    // Skip unknown message
+                    let mut payload = vec![0u8; msg_len - 1];
+                    stream.read_exact(&mut payload).await?;
+                    println!("Skipping unknown message type: {}", msg_id[0]);
+                }
+            }
+        }
+
+        if !got_bitfield {
+            return Err("Timeout waiting for bitfield".into());
+        }
+        Ok(())
+    }
     pub async fn request_piece(
         &mut self,
         index: u32,
         piece_length: u32,
+        start_offset: u32,
         file_path: &str,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<u32, Box<dyn Error>> {
         if self.stream.is_none() {
             return Err("Not connected to peer".into());
         }
 
-        let stream = self.stream.as_mut().unwrap();
         //////////////////////////// Waiting for bitfield //////////////////////////////
-        let mut msg_len = [0u8; 4];
-        stream.read_exact(&mut msg_len).await?;
-        let msg_len = u32::from_be_bytes(msg_len) as usize;
-
-        let mut msg_id = [0u8; 1];
-        stream.read_exact(&mut msg_id).await?;
-        if msg_id[0] != 5 {
-            return Err("Expected bitfield message".into());
+        if self.bitfields.is_none() {
+            self.receive_init_msg().await?;
         }
-
-        let mut bitfield_payload = vec![0u8; msg_len - 1];
-        stream.read_exact(&mut bitfield_payload).await?;
-        println!("bitfield received!");
+        println!("Got initial messages, sending interested message");
         //////////////////////////// Send interested message //////////////////////////////
-        let interested_msg = [0u8, 0, 0, 1, 2];
-        stream.write_all(&interested_msg).await?;
-        println!("interested message sent!");
-        //////////////////////////// Wait for unchoke message //////////////////////////////
-
-        let mut msg_len = [0u8; 4];
-        stream.read_exact(&mut msg_len).await?;
-        let _msg_len = u32::from_be_bytes(msg_len) as usize;
-
-        let mut msg_id = [0u8; 1];
-        stream.read_exact(&mut msg_id).await?;
-        if msg_id[0] != 1 {
-            return Err("Expected unchoke message".into());
+        let stream = self.stream.as_mut().unwrap();
+        if !self.is_interested {
+            let interested_msg = [0u8, 0, 0, 1, 2];
+            stream.write_all(&interested_msg).await?;
+            self.is_interested = true;
+            println!("interested message sent!");
         }
+        //////////////////////////// Wait for unchoke message //////////////////////////////
+        let start_time = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(30);
+        while self.is_choked && start_time.elapsed() < timeout {
+            let mut msg_len = [0u8; 4];
+            stream.read_exact(&mut msg_len).await?;
+            let msg_len = u32::from_be_bytes(msg_len);
+            if msg_len == 0 {
+                println!("recevied keep-alive msg");
+                continue;
+            }
 
-        println!("unchoke message received!");
+            let mut msg_id = [0u8; 1];
+            stream.read_exact(&mut msg_id).await?;
+            match msg_id[0] {
+                0 => println!("Received choke message"),
+                1 => {
+                    println!("Received unchoke message");
+                    self.is_choked = false;
+                }
+                2 => println!("Received interested message"),
+                3 => println!("Received not interested message"),
+                4 => {
+                    let mut have_payload = vec![0u8; msg_len as usize - 1];
+                    stream.read_exact(&mut have_payload).await?;
+                    println!(
+                        "Received have message for piece {}",
+                        u32::from_be_bytes(have_payload[..4].try_into()?)
+                    );
+                }
+                _ => {
+                    let mut payload = vec![0u8; msg_len as usize - 1];
+                    stream.read_exact(&mut payload).await?;
+                    println!("Received unknown message type: {}", msg_id[0]);
+                }
+            }
+        }
+        if self.is_choked {
+            return Err("Timeout waiting for unchoke message".into());
+        }
 
         //////////////////////////// Requesting Piece //////////////////////////////
         println!("Requesting piece: {}", index);
-        let mut file = File::create(file_path).await?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(file_path)
+            .await?;
+
         let block_size = 16 * 1024;
-        let mut offset = 0;
+        let mut offset = start_offset;
+        let mut bytes_downloaded = 0;
 
         while offset < piece_length {
             let block_length = if piece_length - offset < block_size {
@@ -153,31 +353,69 @@ impl Peer {
             request.extend_from_slice(&block_length.to_be_bytes());
             stream.write_all(&request).await?;
 
-            let mut msg_len = [0u8; 4];
-            stream.read_exact(&mut msg_len).await?;
-            let msg_len = u32::from_be_bytes(msg_len) as usize;
+            // Wait for piece data with timeout
+            let mut got_piece = false;
+            let start_time = std::time::Instant::now();
+            let timeout_duration = std::time::Duration::from_secs(30);
 
-            let mut msg_id = [0u8; 1];
-            stream.read_exact(&mut msg_id).await?;
+            while !got_piece && start_time.elapsed() < timeout_duration {
+                let mut msg_len = [0u8; 4];
+                stream.read_exact(&mut msg_len).await?;
+                let msg_len = u32::from_be_bytes(msg_len) as usize;
 
-            if msg_id[0] != 7 {
-                return Err("Invalid msg Id!".into());
+                if msg_len == 0 {
+                    println!("Received keep-alive");
+                    continue;
+                }
+
+                let mut msg_id = [0u8; 1];
+                stream.read_exact(&mut msg_id).await?;
+
+                println!("Received message type: {}", msg_id[0]);
+
+                match msg_id[0] {
+                    0 => return Err("Peer sent choke message during download".into()),
+                    4 => {
+                        // Have message
+                        let mut have = [0u8; 4];
+                        stream.read_exact(&mut have).await?;
+                        println!(
+                            "Received have message for piece {}",
+                            u32::from_be_bytes(have)
+                        );
+                    }
+                    7 => {
+                        // Piece message
+                        let mut piece_index = [0u8; 4];
+                        stream.read_exact(&mut piece_index).await?;
+                        let mut piece_offset = [0u8; 4];
+                        stream.read_exact(&mut piece_offset).await?;
+
+                        let block_size = msg_len - 9; // subtract message type and index/offset
+                        let mut block = vec![0u8; block_size];
+                        stream.read_exact(&mut block).await?;
+
+                        file.write_all(&block).await?;
+                        offset += block_length;
+                        bytes_downloaded += block_length;
+                        got_piece = true;
+                        println!("Received piece block at offset {}", offset);
+                    }
+                    _ => {
+                        // Skip unknown message types
+                        let mut payload = vec![0u8; msg_len - 1];
+                        stream.read_exact(&mut payload).await?;
+                        println!("Skipping unknown message type: {}", msg_id[0]);
+                    }
+                }
             }
 
-            let mut piece_index = [0u8; 4];
-            stream.read_exact(&mut piece_index).await?;
-            let mut piece_offset = [0u8; 4];
-            stream.read_exact(&mut piece_offset).await?;
-
-            let mut block = vec![0u8; msg_len - 9];
-            stream.read_exact(&mut block).await?;
-
-            file.write_all(&block).await?;
-
-            offset += block_length;
+            if !got_piece {
+                return Err("Timeout waiting for piece data".into());
+            }
         }
 
-        Ok(())
+        Ok(bytes_downloaded)
     }
     pub async fn send_msg(&mut self, message: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(stream) = self.stream.as_mut() {
@@ -210,17 +448,27 @@ impl Peer {
         }
     }
 }
+//TODO: have to implement a way to keep track of downloaded files for each torrent
+//TODO: each peer has some of the data(not all) so we should first see which files does the peer
+//offer and then request those or keep a journal of pieces that each peer has. This can reduce the
+//number or retry/error results and also allow me to handle the downloading on multiple threads
+//TODO: have to implement better error handling and retry mechanisms
+//TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
+//they dont exist!
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::path::Path;
+
     use super::*;
     use crate::mapper::TorrentMetaData;
-    use crate::tracker::{generate_peer_id, request_peers};
+    use crate::tracker::{generate_peer_id, request_peers, request_tracker};
     use tokio::test;
 
     #[test]
     async fn test_get_peers() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
         println!("Got the torrent meta data");
 
@@ -238,56 +486,42 @@ mod tests {
         }
     }
 
-    #[test]
+    #[tokio::test]
     async fn test_download() {
-        let path = "C:\\Users\\Lenovo\\Downloads\\Anomalous [FitGirl Repack].json";
-        let torrent_meta_data = TorrentMetaData::from_json_file(path).unwrap();
-        println!("got the torrent meta data");
+        let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
+        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+        println!("Got the torrent meta data");
 
+        // Get peers from trackers
         let peers = request_peers(&torrent_meta_data).await.unwrap();
-        assert!(!peers.is_empty(), "Peer list should not be empty");
-        println!("got the peers: {:?}", peers.clone());
-        let file_struct: Vec<(String, i64)> = torrent_meta_data.get_file_structure();
-        // .iter()
-        // .map(|file| file.0.clone()).collect();
-        println!("file structure extracted");
+        println!("Got {} peers", peers.len());
+        assert!(!peers.is_empty(), "No peers found");
 
         let peer_id = generate_peer_id();
         let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-        println!("info hash calculated");
 
-        for peer_info in peers {
-            let mut peer = Peer::new(peer_info.clone().ip, peer_info.clone().port);
-            if peer.connect().await.is_ok() {
-                println!("connection to peer successful");
+        // Create downloader with our peer list
+        let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
 
-                peer.handshake(info_hash, peer_id)
-                    .await
-                    .map_err(|e| {
-                        eprintln!("Failed to handshake with peer: {:?}", e);
-                    })
-                    .unwrap();
-                println!("handshake with peer done!");
-                let _total_bytes = 0;
-                for (file_index, (file, _file_length)) in file_struct.iter().enumerate() {
-                    println!("downloading file: {:?}", file.clone());
+        // Download the files
+        let file_struct = torrent_meta_data.get_file_structure();
+        let torrent_path = Path::new(path);
+        let parent_dir = torrent_path.parent().unwrap().to_string_lossy().to_string();
 
-                    let piece_length = torrent_meta_data.get_pieces_length();
-                    let file_path = format!("C:\\Users\\Lenovo\\Downloads\\{}", file);
-                    // let start_piece = total_bytes / piece_length;
-                    // let end_piece = (total_bytes + file_length - 1) / piece_length;
+        for (file_index, (file, _)) in file_struct.iter().enumerate() {
+            println!("Downloading file: {:?}", file);
+            let piece_length = torrent_meta_data.get_pieces_length();
+            let file_path = format!("{}/{}", parent_dir, file);
 
-                    peer.request_piece(file_index as u32, piece_length as u32, &file_path)
-                        .await
-                        .map_err(|e| {
-                            eprintln!("Failed to download file: {:?}", e);
-                        })
-                        .unwrap();
-                    println!("downloading file: {:?} done!", file.clone());
+            match downloader
+                .download_piece(file_index as u32, piece_length as u32, &file_path)
+                .await
+            {
+                Ok(()) => println!("Successfully downloaded file: {:?}", file),
+                Err(e) => {
+                    println!("Failed to download file {:?}: {}", file, e);
+                    break;
                 }
-            } else {
-                eprintln!("failed to connect to peer: {:?}", peer_info);
-                continue;
             }
         }
     }
