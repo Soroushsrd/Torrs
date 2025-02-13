@@ -436,16 +436,6 @@ pub fn urlencode(bytes: &[u8]) -> String {
         .map(|&b| format!("%{:02x}", b))
         .collect::<String>()
 }
-pub fn transform_tracker_url(announce: &str) -> String {
-    let mut url = announce.to_string();
-
-    url = url.replace("https://", "http://");
-    if !url.contains(":6881") {
-        url = url.replace("/announce", ":6969/announce");
-    }
-    println!("refined tracker url: {}", url);
-    url
-}
 
 #[cfg(test)]
 mod tests {
