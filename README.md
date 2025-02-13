@@ -49,8 +49,8 @@ Let's break down each of these services and their responsibilities:
     - [x] Implements BitTorrent protocol messaging
 
 8. Piece Selection Service:
-    - [ ] Implements piece selection algorithms (e.g., rarest first)
-    - [ ] Tracks piece availability across peers
+    - [x] Implements piece selection algorithms (e.g., rarest first)
+    - [x] Tracks piece availability across peers
 
 9. File Storage Service:
     - [x] Handles writing downloaded pieces to disk
