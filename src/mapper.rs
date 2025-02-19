@@ -60,6 +60,11 @@ impl TorrentMetaData {
         Ok(torrent_meta_data)
     }
 
+    pub fn calculate_total_pieces(&self) -> u32 {
+        let piece_bytes = self.info.pieces.as_ref();
+        let total = piece_bytes.len() / 20;
+        return total as u32;
+    }
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
     pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData, serde_bencode::error::Error> {
         let file_path = Path::new(path);
