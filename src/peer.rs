@@ -7,14 +7,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
-//TODO: each peer has some of the data(not all) so we should first see which files does the peer
-//offer and then request those or keep a journal of pieces that each peer has. This can reduce the
-//number or retry/error results and also allow me to handle the downloading on multiple threads
-
-//TODO: have to implement better error handling and retry mechanisms
-
 //TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
 //they dont exist!
+//TODO: Go through the downloading process once again and implement multi threading
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PeerInfo {
@@ -22,6 +17,7 @@ pub struct PeerInfo {
     pub port: u16,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Peer {
     pub peer_info: PeerInfo,
@@ -32,6 +28,7 @@ pub struct Peer {
     pub piece_availability: HashSet<u32>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct PieceDownloader {
     pub peers: Vec<Peer>,
@@ -40,6 +37,7 @@ pub struct PieceDownloader {
     pub peer_id: [u8; 20],
 }
 
+#[allow(dead_code)]
 impl PieceDownloader {
     pub fn new(peers: Vec<PeerInfo>, info_hash: [u8; 20], peer_id: [u8; 20]) -> Self {
         let peers = peers
@@ -61,95 +59,108 @@ impl PieceDownloader {
             peer_id,
         }
     }
-    /// First used at the beginning to get the available pieces for each peer,
-    /// then used to try other peers when a peer fails
-    async fn try_next_peer(&mut self) -> Result<(), Box<dyn Error>> {
-        let mut attempts = 0;
-        let max_attempts = self.peers.len();
+    // a method to initialize all peer connections and gather piece availability
+    // should be called first so that we could run get_piece_availability on peers
+    pub async fn initialize_peers(&mut self) -> Result<(), Box<dyn Error>> {
+        let mut successful_connections = 0;
 
-        while attempts < max_attempts {
-            self.current_peer_idx = (self.current_peer_idx + 1) % self.peers.len();
-            attempts += 1;
+        // connect to all peers
+        for peer_idx in 0..self.peers.len() {
+            self.current_peer_idx = peer_idx;
+            let peer = &mut self.peers[peer_idx];
 
-            let peer = &mut self.peers[self.current_peer_idx];
             match peer.connect().await {
-                Ok(()) => {
-                    println!(
-                        "Connected to new peer {}:{}",
-                        peer.peer_info.ip, peer.peer_info.port
-                    );
-                    match peer.handshake(self.hash_info, self.peer_id).await {
-                        Ok(()) => match peer.receive_init_msg().await {
-                            Ok(()) => return Ok(()),
-                            Err(e) => println!("Failed to receive initial messages: {}", e),
-                        },
-                        Err(e) => println!("Failed handshake: {}", e),
-                    }
-                }
-                Err(e) => println!("Failed to connect to peer: {}", e),
+                Ok(()) => match peer.handshake(self.hash_info, self.peer_id).await {
+                    Ok(()) => match peer.receive_init_msg().await {
+                        Ok(()) => {
+                            successful_connections += 1;
+                            println!(
+                                "Successfully initialized peer {}:{}",
+                                peer.peer_info.ip, peer.peer_info.port
+                            );
+                        }
+                        Err(e) => println!("Failed to receive bitfield: {}", e),
+                    },
+                    Err(e) => println!("Handshake failed: {}", e),
+                },
+                Err(e) => println!("Connection failed: {}", e),
             }
         }
+        if successful_connections == 0 {
+            return Err("Could not connect to any peers".into());
+        }
 
-        Err("No more peers available".into())
+        Ok(())
     }
-    /// Finds peers that have a particular piece
-    fn find_peer_with_piece(&self, piece: u32) -> Option<usize> {
-        let output = self
-            .peers
-            .iter()
-            .enumerate()
-            .find(|(_, peer)| peer.piece_availability.contains(&piece))
-            .map(|(index, _)| index);
-        return output;
+
+    /// Enumerates through the peers and finds map the piece index to peers that offer that piece!
+    pub fn get_piece_availability(&self, total_pieces: u32) -> HashMap<u32, Vec<usize>> {
+        let mut pices_with_peers: HashMap<u32, Vec<usize>> = HashMap::new();
+        for piece in 0..total_pieces {
+            let peers_with_piece: Vec<usize> = self
+                .peers
+                .iter()
+                .enumerate()
+                .filter(|(_, peer)| peer.piece_availability.contains(&piece))
+                .map(|(idx, _)| idx)
+                .collect();
+            if !peers_with_piece.is_empty() {
+                pices_with_peers.insert(piece, peers_with_piece);
+            }
+        }
+        pices_with_peers
     }
     pub async fn download_piece(
         &mut self,
         index: u32,
         piece_length: u32,
         file_path: &str,
+        total_pieces: u32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut offset = 0;
         let mut retries_with_same_peer = 0;
         const MAX_RETRIES_PER_PEER: i32 = 2;
 
         while offset < piece_length {
-            if let Some(peer_idx) = self.find_peer_with_piece(index) {
-                self.current_peer_idx = peer_idx;
+            let peers_per_piece = self.get_piece_availability(total_pieces);
+            if let Some(peers) = peers_per_piece.get(&index) {
+                let mut peer_idx = 0;
+                while peer_idx < peers.len() {
+                    self.current_peer_idx = peers[peer_idx];
 
-                let peer = &mut self.peers[self.current_peer_idx];
-                println!(
-                    "Attempting download of piece {} from peer {}:{}",
-                    index, peer.peer_info.ip, peer.peer_info.port
-                );
+                    let peer = &mut self.peers[self.current_peer_idx];
+                    println!(
+                        "Attempting download of piece {} from peer {}:{}",
+                        index, peer.peer_info.ip, peer.peer_info.port
+                    );
 
-                match peer
-                    .request_piece(index, piece_length, offset, file_path)
-                    .await
-                {
-                    Ok(bytes_downloaded) => {
-                        offset += bytes_downloaded;
-                        retries_with_same_peer = 0;
-                        if offset >= piece_length {
-                            return Ok(());
-                        }
-                    }
-                    Err(_e) => {
-                        println!(
-                            "Error downloading from peer: {}:{}",
-                            peer.peer_info.ip, peer.peer_info.port
-                        );
-                        retries_with_same_peer += 1;
-                        if retries_with_same_peer >= MAX_RETRIES_PER_PEER {
-                            println!(
-                                "Switching to the next peer after {} retries",
-                                retries_with_same_peer
-                            );
-                            match self.try_next_peer().await {
-                                Ok(()) => retries_with_same_peer = 0,
-                                Err(e) => return Err(e),
+                    match peer
+                        .request_piece(index, piece_length, offset, file_path)
+                        .await
+                    {
+                        Ok(bytes_downloaded) => {
+                            offset += bytes_downloaded;
+                            retries_with_same_peer = 0;
+                            if offset >= piece_length {
+                                return Ok(());
                             }
-                        } else {
-                            tokio::time::sleep(Duration::from_secs(1)).await;
+                        }
+                        Err(_e) => {
+                            println!(
+                                "Error downloading from peer: {}:{}",
+                                peer.peer_info.ip, peer.peer_info.port
+                            );
+                            retries_with_same_peer += 1;
+                            if retries_with_same_peer >= MAX_RETRIES_PER_PEER {
+                                println!(
+                                    "Switching to the next peer after {} retries",
+                                    retries_with_same_peer
+                                );
+                                retries_with_same_peer = 0;
+                                peer_idx += 1;
+                            } else {
+                                tokio::time::sleep(Duration::from_secs(1)).await;
+                            }
                         }
                     }
                 }
@@ -174,9 +185,8 @@ impl Peer {
 
     pub async fn connect(&mut self) -> Result<(), Box<dyn Error>> {
         let address = format!("{}:{}", self.peer_info.ip, self.peer_info.port);
-        //self.stream = Some(TcpStream::connect(&address).await.unwrap());
         let connect_future = TcpStream::connect(&address);
-        match timeout(Duration::from_secs(10), connect_future).await {
+        match timeout(Duration::from_secs(5), connect_future).await {
             Ok(Ok(stream)) => {
                 self.stream = Some(stream);
                 println!("Successfully connected to stream: {}", address);
@@ -240,7 +250,7 @@ impl Peer {
     pub async fn receive_init_msg(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let mut got_bitfield = false;
         let start_time = std::time::Instant::now();
-        let timeout_duration = std::time::Duration::from_secs(30);
+        let timeout_duration = std::time::Duration::from_secs(15);
 
         while !got_bitfield && start_time.elapsed() < timeout_duration {
             let mut msg_len = [0u8; 4];
@@ -308,12 +318,6 @@ impl Peer {
         if self.stream.is_none() {
             return Err("Not connected to peer".into());
         }
-
-        //////////////////////////// Waiting for bitfield //////////////////////////////
-        if self.bitfields.is_none() {
-            self.receive_init_msg().await?;
-        }
-        println!("Got initial messages, sending interested message");
         //////////////////////////// Send interested message //////////////////////////////
         let stream = self.stream.as_mut().unwrap();
         if !self.is_interested {
@@ -324,7 +328,7 @@ impl Peer {
         }
         //////////////////////////// Wait for unchoke message //////////////////////////////
         let start_time = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(30);
+        let timeout = std::time::Duration::from_secs(20);
         while self.is_choked && start_time.elapsed() < timeout {
             let mut msg_len = [0u8; 4];
             stream.read_exact(&mut msg_len).await?;
@@ -392,7 +396,7 @@ impl Peer {
             // Wait for piece data with timeout
             let mut got_piece = false;
             let start_time = std::time::Instant::now();
-            let timeout_duration = std::time::Duration::from_secs(30);
+            let timeout_duration = std::time::Duration::from_secs(15);
 
             while !got_piece && start_time.elapsed() < timeout_duration {
                 let mut msg_len = [0u8; 4];
@@ -528,10 +532,9 @@ mod tests {
     }
     #[tokio::test]
     async fn test_download() {
-        let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
+        let path = r"/home/rusty/Codes/Fun/Torrs/The Genesis Order [FitGirl Repack].torrent";
         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
         println!("Got the torrent meta data");
-
         // Get peers from trackers
         let peers = request_peers(&torrent_meta_data).await.unwrap();
         println!("Got {} peers", peers.len());
@@ -544,7 +547,7 @@ mod tests {
         let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
 
         // Initialize all peer connections first
-        match downloader.try_next_peer().await {
+        match downloader.initialize_peers().await {
             Ok(()) => println!("Successfully initialized peer connections"),
             Err(e) => {
                 println!("Failed to initialize peer connections: {}", e);
@@ -556,6 +559,7 @@ mod tests {
         let file_struct = torrent_meta_data.get_file_structure();
         let torrent_path = Path::new(path);
         let parent_dir = torrent_path.parent().unwrap().to_string_lossy().to_string();
+        let total_pieces = torrent_meta_data.calculate_total_pieces();
 
         for (file_index, (file, _)) in file_struct.iter().enumerate() {
             println!("Downloading file: {:?}", file);
@@ -563,7 +567,12 @@ mod tests {
             let file_path = format!("{}/{}", parent_dir, file);
 
             match downloader
-                .download_piece(file_index as u32, piece_length as u32, &file_path)
+                .download_piece(
+                    file_index as u32,
+                    piece_length as u32,
+                    &file_path,
+                    total_pieces,
+                )
                 .await
             {
                 Ok(()) => println!("Successfully downloaded file: {:?}", file),
@@ -574,44 +583,4 @@ mod tests {
             }
         }
     }
-    //#[tokio::test]
-    //async fn test_download() {
-    //    let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
-    //    let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
-    //    println!("Got the torrent meta data");
-    //
-    //    // Get peers from trackers
-    //    let peers = request_peers(&torrent_meta_data).await.unwrap();
-    //    println!("Got {} peers", peers.len());
-    //    assert!(!peers.is_empty(), "No peers found");
-    //
-    //    let peer_id = generate_peer_id();
-    //    let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-    //
-    //    // Create downloader with our peer list
-    //    let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
-    //
-    //    downloader.try_next_peer().await.unwrap();
-    //    // Download the files
-    //    let file_struct = torrent_meta_data.get_file_structure();
-    //    let torrent_path = Path::new(path);
-    //    let parent_dir = torrent_path.parent().unwrap().to_string_lossy().to_string();
-    //
-    //    for (file_index, (file, _)) in file_struct.iter().enumerate() {
-    //        println!("Downloading file: {:?}", file);
-    //        let piece_length = torrent_meta_data.get_pieces_length();
-    //        let file_path = format!("{}/{}", parent_dir, file);
-    //
-    //        match downloader
-    //            .download_piece(file_index as u32, piece_length as u32, &file_path)
-    //            .await
-    //        {
-    //            Ok(()) => println!("Successfully downloaded file: {:?}", file),
-    //            Err(e) => {
-    //                println!("Failed to download file {:?}: {}", file, e);
-    //                break;
-    //            }
-    //        }
-    //    }
-    //}
 }
