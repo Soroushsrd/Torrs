@@ -1,19 +1,17 @@
 use crate::{
     mapper::TorrentMetaData,
     peer::{Peer, PeerInfo},
-    tracker::{generate_peer_id, request_peers, request_tracker},
+    tracker::{generate_peer_id,  request_tracker},
 };
 use data_encoding::BASE32;
 use futures::future::join_all;
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
-use std::path::Path;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::time::timeout;
 use url::Url;
 
@@ -449,7 +447,6 @@ impl MagnetInfo {
 mod tests {
 
     use super::*;
-    use tokio;
 
     #[test]
     fn test_magnet_parser() {
