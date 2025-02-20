@@ -8,4 +8,4 @@ Cargo.lock
 *.torrent
 *.Identifier
 *.bin
-./downloads/
+downloads/
