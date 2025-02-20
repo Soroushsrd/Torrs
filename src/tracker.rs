@@ -237,7 +237,6 @@ pub async fn request_udp_tracker(
                     "Response action: {}, transaction_id: {}",
                     action, resp_transaction_id
                 );
-                println!("First 20 bytes: {:?}", &response[..20.min(size)]);
 
                 if resp_transaction_id != transaction_id {
                     println!("Transaction ID mismatch");

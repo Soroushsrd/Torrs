@@ -7,9 +7,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+use crate::mapper::TorrentMetaData;
+
 //TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
 //they dont exist!
 //TODO: Go through the downloading process once again and implement multi threading
+//TODO: Should start the downloading process once it has found a peer with the right bitfields
+//then run the rest of the process in the background
+//TODO: Add rarest first algo to download the pieces that fewer peers have first
+//TODO: Refactor getting piece availability to be dynamically called instead of once at the
+//beginning
+//TODO: Skip pieces that fail to be downloaded- must have them saved somewhere to download them
+//later on
+//TODO: Add piece verification
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PeerInfo {
@@ -164,6 +174,127 @@ impl PieceDownloader {
                         }
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+    pub async fn download_torrent(
+        &mut self,
+        torrent: &TorrentMetaData,
+        output_dir: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.initialize_peers().await?;
+
+        let piece_length = torrent.get_pieces_length() as u32;
+        let total_pieces = torrent.calculate_total_pieces();
+
+        let temp_dir = format!("{}/temp_pieces", output_dir);
+        tokio::fs::create_dir_all(&temp_dir).await?;
+
+        let mut downloaded_pieces = HashSet::new();
+
+        let piece_availability = self.get_piece_availability(total_pieces);
+
+        for piece_index in 0..total_pieces {
+            if downloaded_pieces.contains(&piece_index) {
+                continue;
+            }
+            let actual_piece_length = if piece_index == total_pieces - 1 {
+                let total_size = torrent.get_total_size();
+                let remainder = total_size % torrent.get_pieces_length();
+                if remainder == 0 {
+                    piece_length
+                } else {
+                    remainder as u32
+                }
+            } else {
+                piece_length
+            };
+
+            let temp_piece_path = format!("{}/piece_{}", temp_dir, piece_index);
+
+            if let Some(peer_indices) = piece_availability.get(&piece_index) {
+                let mut success = false;
+
+                for &peer_idx in peer_indices {
+                    self.current_peer_idx = peer_idx;
+                    match self
+                        .download_piece(
+                            piece_index,
+                            actual_piece_length,
+                            &temp_piece_path,
+                            total_pieces,
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            downloaded_pieces.insert(piece_index);
+                            success = true;
+                            println!("Successfully downloaded and verified piece {}", piece_index);
+                            break;
+                        }
+                        Err(e) => {
+                            println!("failed to download the piece {}: {}", piece_index, e);
+                        }
+                    }
+                }
+                if !success {
+                    return Err(format!("Failed to download piece {}", piece_index).into());
+                }
+            } else {
+                return Err(format!("No peers available for piece {}", piece_index).into());
+            }
+        }
+        println!("All pieces downloaded! Assembling files...");
+        PieceDownloader::assemble_files(torrent, &temp_dir, output_dir).await?;
+        tokio::fs::remove_dir_all(&temp_dir).await?;
+        Ok(())
+    }
+    pub async fn assemble_files(
+        torrent: &TorrentMetaData,
+        temp_dir: &str,
+        output_dir: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let piece_length = torrent.get_pieces_length() as u64;
+        let file_structure = torrent.get_file_structure();
+        let mut absolute_offset = 0u64;
+
+        for (file_path, file_length) in file_structure {
+            let full_path = format!("{}/{}", output_dir, file_path);
+
+            if let Some(parent) = std::path::Path::new(&full_path).parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            let mut outputfile = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&full_path)
+                .await?;
+
+            let file_length = file_length as u64;
+            let mut bytes_written = 0u64;
+
+            while bytes_written < file_length {
+                let current_piece = (absolute_offset / piece_length) as u32;
+                let offset_in_piece = (absolute_offset % piece_length) as u64;
+
+                let piece_path = format!("{}/piece_{}", temp_dir, current_piece);
+                let piece_data = tokio::fs::read(&piece_path).await?;
+
+                let bytes_remaining_in_piece = piece_data.len() as u64 - offset_in_piece;
+                let bytes_remaining_in_file = file_length - bytes_written;
+
+                let bytes_to_write =
+                    std::cmp::min(bytes_remaining_in_piece, bytes_remaining_in_file) as usize;
+                outputfile
+                    .write_all(
+                        &piece_data
+                            [offset_in_piece as usize..(offset_in_piece as usize + bytes_to_write)],
+                    )
+                    .await?;
+                bytes_written += bytes_to_write as u64;
+                absolute_offset += bytes_to_write as u64;
             }
         }
         Ok(())
@@ -369,11 +500,20 @@ impl Peer {
 
         //////////////////////////// Requesting Piece //////////////////////////////
         println!("Requesting piece: {}", index);
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(file_path)
-            .await?;
+        let mut file = if start_offset == 0 {
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(file_path)
+                .await?
+        } else {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file_path)
+                .await?
+        };
 
         let block_size = 16 * 1024;
         let mut offset = start_offset;
@@ -530,57 +670,83 @@ mod tests {
             }
         }
     }
+    //#[tokio::test]
+    //async fn test_download() {
+    //    let path = r"/home/rusty/Codes/Fun/Torrs/The Genesis Order [FitGirl Repack].torrent";
+    //    let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+    //    println!("Got the torrent meta data");
+    //    // Get peers from trackers
+    //    let peers = request_peers(&torrent_meta_data).await.unwrap();
+    //    println!("Got {} peers", peers.len());
+    //    assert!(!peers.is_empty(), "No peers found");
+    //
+    //    let peer_id = generate_peer_id();
+    //    let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+    //
+    //    // Create downloader with our peer list
+    //    let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
+    //
+    //    // Initialize all peer connections first
+    //    match downloader.initialize_peers().await {
+    //        Ok(()) => println!("Successfully initialized peer connections"),
+    //        Err(e) => {
+    //            println!("Failed to initialize peer connections: {}", e);
+    //            return;
+    //        }
+    //    }
+    //
+    //    // Download the files
+    //    let file_struct = torrent_meta_data.get_file_structure();
+    //    let torrent_path = Path::new(path);
+    //    let parent_dir = torrent_path.parent().unwrap().to_string_lossy().to_string();
+    //    let total_pieces = torrent_meta_data.calculate_total_pieces();
+    //
+    //    for (file_index, (file, _)) in file_struct.iter().enumerate() {
+    //        println!("Downloading file: {:?}", file);
+    //        let piece_length = torrent_meta_data.get_pieces_length();
+    //        let file_path = format!("{}/{}", parent_dir, file);
+    //
+    //        match downloader
+    //            .download_piece(
+    //                file_index as u32,
+    //                piece_length as u32,
+    //                &file_path,
+    //                total_pieces,
+    //            )
+    //            .await
+    //        {
+    //            Ok(()) => println!("Successfully downloaded file: {:?}", file),
+    //            Err(e) => {
+    //                println!("Failed to download file {:?}: {}", file, e);
+    //                break;
+    //            }
+    //        }
+    //    }
+    //}
     #[tokio::test]
     async fn test_download() {
         let path = r"/home/rusty/Codes/Fun/Torrs/The Genesis Order [FitGirl Repack].torrent";
         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
-        println!("Got the torrent meta data");
-        // Get peers from trackers
         let peers = request_peers(&torrent_meta_data).await.unwrap();
-        println!("Got {} peers", peers.len());
-        assert!(!peers.is_empty(), "No peers found");
-
         let peer_id = generate_peer_id();
         let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
 
-        // Create downloader with our peer list
         let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
 
-        // Initialize all peer connections first
-        match downloader.initialize_peers().await {
-            Ok(()) => println!("Successfully initialized peer connections"),
-            Err(e) => {
-                println!("Failed to initialize peer connections: {}", e);
-                return;
-            }
-        }
+        let torrent_path = std::path::Path::new(path);
+        let output_dir = torrent_path
+            .parent()
+            .unwrap()
+            .join("downloads")
+            .to_string_lossy()
+            .to_string();
 
-        // Download the files
-        let file_struct = torrent_meta_data.get_file_structure();
-        let torrent_path = Path::new(path);
-        let parent_dir = torrent_path.parent().unwrap().to_string_lossy().to_string();
-        let total_pieces = torrent_meta_data.calculate_total_pieces();
-
-        for (file_index, (file, _)) in file_struct.iter().enumerate() {
-            println!("Downloading file: {:?}", file);
-            let piece_length = torrent_meta_data.get_pieces_length();
-            let file_path = format!("{}/{}", parent_dir, file);
-
-            match downloader
-                .download_piece(
-                    file_index as u32,
-                    piece_length as u32,
-                    &file_path,
-                    total_pieces,
-                )
-                .await
-            {
-                Ok(()) => println!("Successfully downloaded file: {:?}", file),
-                Err(e) => {
-                    println!("Failed to download file {:?}: {}", file, e);
-                    break;
-                }
-            }
+        match downloader
+            .download_torrent(&torrent_meta_data, &output_dir)
+            .await
+        {
+            Ok(()) => println!("Successfully downloaded torrent"),
+            Err(e) => println!("Failed to download: {}", e),
         }
     }
 }
