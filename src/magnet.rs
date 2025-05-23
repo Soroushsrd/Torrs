@@ -21,6 +21,7 @@ const METADATA_EXTENSION_ID: usize = 1;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const PIECE_TIMEOUT: Duration = Duration::from_secs(30);
 
+//TODO: Add TorrentError to this module
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct MagnetInfo {

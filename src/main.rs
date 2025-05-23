@@ -1,3 +1,4 @@
+mod error;
 mod magnet;
 mod mapper;
 mod parser;

@@ -1,3 +1,4 @@
+use crate::error::*;
 use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
@@ -49,7 +50,7 @@ pub struct TorrentMetaData {
 #[allow(dead_code)]
 impl TorrentMetaData {
     /// Reads a json file and maps its data to a TorrentMetaData format
-    pub fn from_json_file(path: &str) -> Result<TorrentMetaData, serde_json::error::Error> {
+    pub fn from_json_file(path: &str) -> Result<TorrentMetaData> {
         let file_path = Path::new(path);
         let file = File::open(file_path).expect("Could not open the file");
         let reader = BufReader::new(file);
@@ -65,7 +66,7 @@ impl TorrentMetaData {
         total as u32
     }
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
-    pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData, serde_bencode::error::Error> {
+    pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData> {
         let file_path = Path::new(path);
         // let file = File::open(file_path).expect("failed to open the file");
         let bytes = std::fs::read(file_path).expect("failed to read the file");
@@ -142,7 +143,7 @@ impl TorrentMetaData {
     }
 
     /// Calculates the complete info hash
-    pub fn calculate_info_hash(&self) -> Result<[u8; 20], Box<dyn std::error::Error>> {
+    pub fn calculate_info_hash(&self) -> Result<[u8; 20]> {
         let info_bencoded = serde_bencode::to_bytes(&self.info)?;
         let mut hasher = Sha1::new();
         hasher.update(&info_bencoded);

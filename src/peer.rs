@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
+use crate::error::{Result, TorrentError};
 use crate::mapper::TorrentMetaData;
 
 //TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
@@ -71,7 +71,7 @@ impl PieceDownloader {
     }
     // a method to initialize all peer connections and gather piece availability
     // should be called first so that we could run get_piece_availability on peers
-    pub async fn initialize_peers(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn initialize_peers(&mut self) -> Result<()> {
         let mut successful_connections = 0;
 
         // connect to all peers
@@ -97,7 +97,9 @@ impl PieceDownloader {
             }
         }
         if successful_connections == 0 {
-            return Err("Could not connect to any peers".into());
+            return Err(TorrentError::PeerError(
+                "couldnt connect to any peer".to_string(),
+            ));
         }
 
         Ok(())
@@ -126,7 +128,7 @@ impl PieceDownloader {
         piece_length: u32,
         file_path: &str,
         total_pieces: u32,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let mut offset = 0;
         let mut retries_with_same_peer = 0;
         const MAX_RETRIES_PER_PEER: i32 = 2;
@@ -182,7 +184,7 @@ impl PieceDownloader {
         &mut self,
         torrent: &TorrentMetaData,
         output_dir: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         self.initialize_peers().await?;
 
         let piece_length = torrent.get_pieces_length() as u32;
@@ -239,10 +241,10 @@ impl PieceDownloader {
                     }
                 }
                 if !success {
-                    return Err(format!("Failed to download piece {}", piece_index).into());
+                    return Err(TorrentError::DownloadTimedout);
                 }
             } else {
-                return Err(format!("No peers available for piece {}", piece_index).into());
+                return Err(TorrentError::NoAvailablePeers(piece_index));
             }
         }
         println!("All pieces downloaded! Assembling files...");
@@ -254,7 +256,7 @@ impl PieceDownloader {
         torrent: &TorrentMetaData,
         temp_dir: &str,
         output_dir: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let piece_length = torrent.get_pieces_length() as u64;
         let file_structure = torrent.get_file_structure();
         let mut absolute_offset = 0u64;
@@ -314,7 +316,7 @@ impl Peer {
         }
     }
 
-    pub async fn connect(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn connect(&mut self) -> Result<()> {
         let address = format!("{}:{}", self.peer_info.ip, self.peer_info.port);
         let connect_future = TcpStream::connect(&address);
         match timeout(Duration::from_secs(5), connect_future).await {
@@ -323,18 +325,21 @@ impl Peer {
                 println!("Successfully connected to stream: {}", address);
                 Ok(())
             }
-            Ok(Err(e)) => Err(format!("Connection error to peer {}: {}", address, e).into()),
-            Err(_) => Err(format!("Connection timeout to peer {}", address).into()),
+            Ok(Err(e)) => Err(TorrentError::ConnectionFailed(
+                format!("Connection error to peer {}: {}", address, e).into(),
+            )),
+            Err(_) => Err(TorrentError::ConnectionTimedOut(format!(
+                "Connection timeout to {}",
+                address
+            ))),
         }
     }
 
-    pub async fn handshake(
-        &mut self,
-        info_hash: [u8; 20],
-        peer_id: [u8; 20],
-    ) -> Result<(), Box<dyn Error>> {
+    pub async fn handshake(&mut self, info_hash: [u8; 20], peer_id: [u8; 20]) -> Result<()> {
         if self.stream.is_none() {
-            return Err("Stream not established yet".into());
+            return Err(TorrentError::PeerError(
+                "Stream not established yet".to_string(),
+            ));
         }
 
         let mut handshake_msg = Vec::with_capacity(68);
@@ -346,46 +351,53 @@ impl Peer {
         handshake_msg.extend_from_slice(&info_hash);
         handshake_msg.extend_from_slice(&peer_id);
 
-        // Send handshake with timeout
         match timeout(Duration::from_secs(4), stream.write_all(&handshake_msg)).await {
             Ok(result) => result?,
-            Err(_) => return Err("Handshake send timeout".into()),
+            Err(_) => {
+                return Err(TorrentError::ConnectionTimedOut(
+                    "Handshake send timeout".to_string(),
+                ));
+            }
         };
 
         println!("Handshake sent, waiting for response...");
 
-        // Read peer's handshake with timeout
         let mut response = vec![0u8; 68];
-        match timeout(Duration::from_secs(10), stream.read_exact(&mut response)).await {
-            Ok(result) => result?,
-            Err(_) => return Err("Handshake receive timeout".into()),
-        };
+        timeout(Duration::from_secs(10), stream.read_exact(&mut response))
+            .await
+            .map_err(|_| TorrentError::ConnectionTimedOut("Handshake receive timeout".to_string()))?
+            .map_err(|e| TorrentError::PeerError(format!("Failed to read handshake: {}", e)))?;
 
         println!("Handshake response received!");
         if response[0] != 19 || &response[1..20] != b"BitTorrent protocol" {
-            return Err(format!("Invalid Handshake Response! Got: {:?}", &response[..20]).into());
+            return Err(TorrentError::InvalidHandshake(format!(
+                "Invalid protocol string. Got: {:?}",
+                &response[..20]
+            )));
         }
 
         let peer_info_hash = &response[28..48];
         if peer_info_hash != info_hash {
-            return Err(format!(
+            return Err(TorrentError::InvalidHandshake(format!(
                 "Info hash mismatch.\nExpected: {:02x?}\nReceived: {:02x?}",
                 info_hash, peer_info_hash
-            )
-            .into());
+            )));
         }
 
         Ok(())
     }
 
-    pub async fn receive_init_msg(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn receive_init_msg(&mut self) -> Result<()> {
         let mut got_bitfield = false;
         let start_time = std::time::Instant::now();
         let timeout_duration = std::time::Duration::from_secs(15);
 
         while !got_bitfield && start_time.elapsed() < timeout_duration {
             let mut msg_len = [0u8; 4];
-            let stream = self.stream.as_mut().ok_or("No stream available")?;
+            let stream = self
+                .stream
+                .as_mut()
+                .ok_or_else(|| TorrentError::PeerError("Not connected to peer".to_string()))?;
             stream.read_exact(&mut msg_len).await?;
             let msg_len = u32::from_be_bytes(msg_len) as usize;
 
@@ -435,7 +447,9 @@ impl Peer {
         }
 
         if !got_bitfield {
-            return Err("Timeout waiting for bitfield".into());
+            return Err(TorrentError::ConnectionTimedOut(
+                "Timeout waiting for bitfield".to_string(),
+            ));
         }
         Ok(())
     }
@@ -445,15 +459,17 @@ impl Peer {
         piece_length: u32,
         start_offset: u32,
         file_path: &str,
-    ) -> Result<u32, Box<dyn Error>> {
-        if self.stream.is_none() {
-            return Err("Not connected to peer".into());
-        }
+    ) -> Result<u32> {
+        let stream = self
+            .stream
+            .as_mut()
+            .ok_or_else(|| TorrentError::PeerError("Not connected to peer".to_string()))?;
         //////////////////////////// Send interested message //////////////////////////////
-        let stream = self.stream.as_mut().unwrap();
         if !self.is_interested {
             let interested_msg = [0u8, 0, 0, 1, 2];
-            stream.write_all(&interested_msg).await?;
+            stream.write_all(&interested_msg).await.map_err(|e| {
+                TorrentError::PeerError(format!("Failed to send interested: {}", e))
+            })?;
             self.is_interested = true;
             println!("interested message sent!");
         }
@@ -482,9 +498,10 @@ impl Peer {
                 4 => {
                     let mut have_payload = vec![0u8; msg_len as usize - 1];
                     stream.read_exact(&mut have_payload).await?;
+                    //TODO: Remove the println or impl the error from try into for TorrentError
                     println!(
                         "Received have message for piece {}",
-                        u32::from_be_bytes(have_payload[..4].try_into()?)
+                        u32::from_be_bytes(have_payload[..4].try_into().unwrap())
                     );
                 }
                 _ => {
@@ -495,7 +512,7 @@ impl Peer {
             }
         }
         if self.is_choked {
-            return Err("Timeout waiting for unchoke message".into());
+            return Err(TorrentError::DownloadTimedout);
         }
 
         //////////////////////////// Requesting Piece //////////////////////////////
@@ -506,13 +523,20 @@ impl Peer {
                 .write(true)
                 .truncate(true)
                 .open(file_path)
-                .await?
+                .await
+                .map_err(|e| match e.kind() {
+                    std::io::ErrorKind::PermissionDenied => {
+                        TorrentError::PermissionDenied(file_path.to_string())
+                    }
+                    _ => TorrentError::IoError(e),
+                })?
         } else {
             OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(file_path)
-                .await?
+                .await
+                .map_err(TorrentError::from)?
         };
 
         let block_size = 16 * 1024;
@@ -554,7 +578,11 @@ impl Peer {
                 println!("Received message type: {}", msg_id[0]);
 
                 match msg_id[0] {
-                    0 => return Err("Peer sent choke message during download".into()),
+                    0 => {
+                        return Err(TorrentError::PeerError(
+                            "Peer sent choke message during download".to_string(),
+                        ));
+                    }
                     4 => {
                         // Have message
                         let mut have = [0u8; 4];
@@ -591,13 +619,15 @@ impl Peer {
             }
 
             if !got_piece {
-                return Err("Timeout waiting for piece data".into());
+                return Err(TorrentError::PeerError(
+                    "Timeout waiting for piece data".to_string(),
+                ));
             }
         }
 
         Ok(bytes_downloaded)
     }
-    pub async fn send_msg(&mut self, message: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn send_msg(&mut self, message: &[u8]) -> Result<()> {
         if let Some(stream) = self.stream.as_mut() {
             stream
                 .write_all(message)
@@ -606,10 +636,10 @@ impl Peer {
             stream.flush().await.expect("Failed to flush the stream");
             Ok(())
         } else {
-            Err("No stream was found!".into())
+            Err(TorrentError::PeerError("No stream was found!".to_string()))
         }
     }
-    pub async fn receive_msg(&mut self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn receive_msg(&mut self) -> Result<Vec<u8>> {
         if let Some(stream) = self.stream.as_mut() {
             let mut length_bytes = [0u8; 4];
             stream
@@ -624,7 +654,7 @@ impl Peer {
                 .expect("Failed to read the message!");
             Ok(msg)
         } else {
-            Err("No stream was found!".into())
+            Err(TorrentError::PeerError("No stream was found!".to_string()))
         }
     }
     fn parse_bitfield(&mut self, bitfield: &[u8]) {

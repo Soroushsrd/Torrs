@@ -1,66 +1,69 @@
+use crate::error::*;
+use crate::mapper::TorrentMetaData;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
-use crate::mapper::TorrentMetaData;
-
-// fix the pieces part!
 /// Decodes the torrent file as a json
 #[allow(dead_code)]
-pub fn decode_json(bpath: &str, opath: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn decode_json(bpath: &str, opath: &str) -> Result<()> {
     let input_path = Path::new(bpath);
     let output_path = Path::new(opath);
 
-    // Validate input path
     if !input_path.exists() {
-        return Err(format!("Input file does not exist: {}", bpath).into());
+        return Err(TorrentError::FileNotFound(bpath.to_string()));
     }
 
-    // Validate output directory exists
     if let Some(parent) = output_path.parent() {
         if !parent.exists() {
-            return Err(format!("Output directory does not exist: {}", parent.display()).into());
+            std::fs::create_dir_all(parent).map_err(|e| {
+                TorrentError::PermissionDenied(format!(
+                    "Cannot create output directory {}: {}",
+                    parent.display(),
+                    e
+                ))
+            })?;
         }
     }
 
-    // Read torrent file
-    let torrent_bytes = std::fs::read(input_path).map_err(|e| {
-        format!(
-            "Failed to read torrent file {}: {}",
-            input_path.display(),
-            e
-        )
+    let torrent_bytes = std::fs::read(input_path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            TorrentError::PermissionDenied(format!("Cannot read file: {}", bpath))
+        }
+        std::io::ErrorKind::NotFound => TorrentError::FileNotFound(bpath.to_string()),
+        _ => TorrentError::IoError(e),
     })?;
 
-    // Decode bencode to your existing TorrentMetaData struct
     let torrent: TorrentMetaData = serde_bencode::from_bytes(&torrent_bytes).map_err(|e| {
-        format!(
-            "Failed to decode bencode from {}: {}",
+        TorrentError::InvalidTorrentFile(format!(
+            "Bencode decode error in {}: {}",
             input_path.display(),
             e
-        )
+        ))
+    })?;
+    let json_content = serde_json::to_string_pretty(&torrent).map_err(|e| {
+        TorrentError::InvalidTorrentFile(format!("JSON serialization failed: {}", e))
     })?;
 
-    // Convert to JSON
-    let json_content = serde_json::to_string_pretty(&torrent)
-        .map_err(|e| format!("Failed to serialize torrent data to JSON: {}", e))?;
-
-    // Write to output file
-    let mut file = File::create(output_path).map_err(|e| {
-        format!(
-            "Failed to create output file {}: {}",
-            output_path.display(),
-            e
-        )
+    let mut file = File::create(output_path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            TorrentError::PermissionDenied(format!("Cannot create file: {}", output_path.display()))
+        }
+        std::io::ErrorKind::AlreadyExists => {
+            TorrentError::InvalidConfigs(format!("File already exists: {}", output_path.display()))
+        }
+        _ => TorrentError::IoError(e),
     })?;
 
-    file.write_all(json_content.as_bytes()).map_err(|e| {
-        format!(
-            "Failed to write JSON content to {}: {}",
-            output_path.display(),
-            e
-        )
-    })?;
+    file.write_all(json_content.as_bytes())
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::WriteZero => TorrentError::DiskFull,
+            std::io::ErrorKind::PermissionDenied => TorrentError::PermissionDenied(format!(
+                "Cannot write to file: {}",
+                output_path.display()
+            )),
+            _ => TorrentError::IoError(e),
+        })?;
 
     println!(
         "Successfully decoded torrent file to JSON at: {}",

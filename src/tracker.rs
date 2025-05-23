@@ -11,6 +11,7 @@ use url::Url;
 
 const UDP_TIMEOUT: Duration = Duration::from_secs(10);
 
+//TODO: Add TorrentError to this module
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TrackerResponse {
@@ -376,7 +377,6 @@ pub async fn request_http_trackers(
         urlencode(&peer_id),
         total_length
     );
-    // let url = transform_tracker_url(url.as_str());
     let full_url = format!("{}{}", url.as_str().trim_end_matches('/'), q);
 
     let response = match reqwest::get(full_url.clone()).await {
