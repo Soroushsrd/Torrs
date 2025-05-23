@@ -277,7 +277,7 @@ impl PieceDownloader {
 
             while bytes_written < file_length {
                 let current_piece = (absolute_offset / piece_length) as u32;
-                let offset_in_piece = (absolute_offset % piece_length) as u64;
+                let offset_in_piece = absolute_offset % piece_length;
 
                 let piece_path = format!("{}/piece_{}", temp_dir, current_piece);
                 let piece_data = tokio::fs::read(&piece_path).await?;
@@ -421,7 +421,7 @@ impl Peer {
                     let mut bitfield = vec![0u8; msg_len - 1];
                     stream.read_exact(&mut bitfield).await?;
                     println!("Received bitfield of length {}", bitfield.len());
-                    self.parse_bitfield(&mut bitfield);
+                    self.parse_bitfield(&bitfield);
                     self.bitfields = Some(bitfield);
                     got_bitfield = true;
                 }
@@ -644,7 +644,6 @@ impl Peer {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
 
     use super::*;
     use crate::mapper::TorrentMetaData;

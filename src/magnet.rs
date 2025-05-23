@@ -1,7 +1,7 @@
 use crate::{
     mapper::TorrentMetaData,
     peer::{Peer, PeerInfo},
-    tracker::{generate_peer_id,  request_tracker},
+    tracker::{generate_peer_id, request_tracker},
 };
 use data_encoding::BASE32;
 use futures::future::join_all;
@@ -119,13 +119,13 @@ impl MagnetInfo {
         let mut extension_handshake = HashMap::new();
         extension_handshake.insert("ut_metadata".to_string(), METADATA_EXTENSION_ID as i64);
 
-        let mut handshake_msg = ExtensionHandshake {
+        let handshake_msg = ExtensionHandshake {
             m: extension_handshake,
             metadata_size: None,
             v: Some("RU0001".to_string()),
         };
 
-        let handshake_bytes = serde_bencode::to_bytes(&mut handshake_msg).unwrap();
+        let handshake_bytes = serde_bencode::to_bytes(&handshake_msg).unwrap();
         println!("Handshake Bytes: {:?}", handshake_bytes.clone());
         self.send_extension_message(&mut peer, EXTENSION_HANDSHAKE_ID as u8, &handshake_bytes)
             .await?;
@@ -225,7 +225,7 @@ impl MagnetInfo {
                 *metadata_count.entry(metadata_hash).or_insert(0) += 1
             }
         }
-        if let Some((most_common_hash, _)) = metadata_count.iter().max_by_key(|(_, &count)| count) {
+        if let Some((most_common_hash, _)) = metadata_count.iter().max_by_key(|&(_, count)| count) {
             if let Some((_, metadata)) = valid_metadata
                 .iter()
                 .find(|(hash, _)| hash == most_common_hash)

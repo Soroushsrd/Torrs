@@ -1,7 +1,6 @@
 use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use serde_json;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::HashMap;
@@ -63,7 +62,7 @@ impl TorrentMetaData {
     pub fn calculate_total_pieces(&self) -> u32 {
         let piece_bytes = self.info.pieces.as_ref();
         let total = piece_bytes.len() / 20;
-        return total as u32;
+        total as u32
     }
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
     pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData, serde_bencode::error::Error> {
@@ -127,16 +126,16 @@ impl TorrentMetaData {
         if let Some(files) = &self.info.files {
             return files.iter().map(|file| file.length).sum();
         }
-        return self.info.length.unwrap_or(0);
+        self.info.length.unwrap_or(0)
     }
 
     /// Gets the file structure for later use
     pub fn get_file_structure(&self) -> Vec<(String, i64)> {
         if let Some(files) = &self.info.files {
-            return files
+            files
                 .iter()
                 .map(|file| (file.path.join("/"), file.length))
-                .collect();
+                .collect()
         } else {
             vec![(self.info.name.clone(), self.info.length.unwrap_or(0))]
         }

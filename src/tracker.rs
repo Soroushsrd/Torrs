@@ -49,7 +49,6 @@ pub async fn request_peers(
             println!("Connecting to UDP tracker: {}", tracker);
             //continue;
             let tracker = tracker.to_string();
-            let info_hash = info_hash.clone();
 
             let handle = task::spawn(async move {
                 match tokio::time::timeout(
@@ -66,7 +65,6 @@ pub async fn request_peers(
             handles.push(handle);
         } else {
             let tracker = tracker.to_string();
-            let info_hash = info_hash.clone();
 
             let handle = task::spawn(async move {
                 match tokio::time::timeout(
@@ -150,14 +148,10 @@ pub async fn request_udp_tracker(
     // Bind to an IPv4 address specifically
     let socket = tokio::net::UdpSocket::bind("0.0.0.0:0").await?;
 
-    let addr = match tokio::net::lookup_host((host, port)).await? {
-        mut addrs => {
-            let ipv4_addr = addrs
-                .find(|addr| addr.is_ipv4())
-                .ok_or("No IPv4 address found for tracker")?;
-            ipv4_addr
-        }
-    };
+    let mut addrs = tokio::net::lookup_host((host, port)).await?;
+    let addr = addrs
+        .find(|addr| addr.is_ipv4())
+        .ok_or("No IPv4 address found for tracker")?;
 
     match timeout(UDP_TIMEOUT, socket.connect(addr)).await {
         Ok(result) => result?,
@@ -392,7 +386,7 @@ pub async fn request_http_trackers(
         Err(e) => return Err(format!("Failed to connect to {}:{}", url, e).into()),
     };
 
-    if response.starts_with(&[b'<']) {
+    if response.starts_with(b"<") {
         return Err("Tracker returned HTML instead of bencoded data".into());
     }
 
