@@ -35,6 +35,7 @@ pub fn generate_peer_id() -> [u8; 20] {
 }
 
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
+#[allow(dead_code)]
 pub async fn request_peers(
     torrent: &TorrentMetaData,
 ) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
@@ -436,7 +437,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn test_request_http_tracker() {
-        let path = r"/home/rusty/Rs/Torrs/The.Agency.2024.S01E09.WEB.x264-TORRENTGALAXY.torrent";
+        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
 
         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
         println!("Got the torrent meta data");

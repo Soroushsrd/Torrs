@@ -724,7 +724,7 @@ mod tests {
     //}
     #[tokio::test]
     async fn test_download() {
-        let path = r"/home/rusty/Codes/Fun/Torrs/The Genesis Order [FitGirl Repack].torrent";
+        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
         let peers = request_peers(&torrent_meta_data).await.unwrap();
         let peer_id = generate_peer_id();

@@ -76,8 +76,8 @@ mod tests {
     #[test]
     fn test_decode_json() {
         decode_json(
-            r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent",
-            r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.json",
+            "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent",
+            "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].json",
         )
         .unwrap();
     }

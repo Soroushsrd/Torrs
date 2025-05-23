@@ -160,7 +160,7 @@ mod tests {
         ($name:ident,$method:ident) => {
             #[test]
             fn $name() {
-                let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+                let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
                 let result = TorrentMetaData::from_trnt_file(path).unwrap();
                 let output = result.$method();
 
@@ -171,7 +171,7 @@ mod tests {
 
     #[test]
     fn test_from_file() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
+        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
         let result = TorrentMetaData::from_trnt_file(path).unwrap();
         println!("torrent file publishe: {:?}", result.publisher)
     }
