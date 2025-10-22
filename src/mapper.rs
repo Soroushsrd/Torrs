@@ -5,8 +5,6 @@ use serde_bytes::ByteBuf;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::BufReader;
 use std::path::Path;
 
 /// Stores length and path parameters in a torrent file
@@ -25,7 +23,7 @@ pub struct TorrentInfo {
     #[serde(with = "serde_bytes")]
     pub pieces: ByteBuf,
     pub files: Option<Vec<TorrentFile>>,
-    pub length: Option<i64>, //  optional
+    pub length: Option<i64>,
     #[serde(default)]
     pub private: i64,
 }
@@ -47,19 +45,8 @@ pub struct TorrentMetaData {
     #[serde(rename = "publisher-url")]
     publisher_url: Option<String>,
 }
-#[allow(dead_code)]
+
 impl TorrentMetaData {
-    /// Reads a json file and maps its data to a TorrentMetaData format
-    pub fn from_json_file(path: &str) -> Result<TorrentMetaData> {
-        let file_path = Path::new(path);
-        let file = File::open(file_path).expect("Could not open the file");
-        let reader = BufReader::new(file);
-
-        let torrent_meta_data =
-            serde_json::from_reader(reader).expect("serde could not read the buffer");
-        Ok(torrent_meta_data)
-    }
-
     pub fn calculate_total_pieces(&self) -> u32 {
         let piece_bytes = self.info.pieces.as_ref();
         let total = piece_bytes.len() / 20;
@@ -68,17 +55,8 @@ impl TorrentMetaData {
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
     pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData> {
         let file_path = Path::new(path);
-        // let file = File::open(file_path).expect("failed to open the file");
-        let bytes = std::fs::read(file_path).expect("failed to read the file");
-        let torrent: TorrentMetaData = serde_bencode::from_bytes(&bytes)
-            .map_err(|e| {
-                format!(
-                    "Failed to decode bencode from {}: {}",
-                    file_path.display(),
-                    e
-                )
-            })
-            .unwrap();
+        let bytes = std::fs::read(file_path)?;
+        let torrent: TorrentMetaData = serde_bencode::from_bytes(&bytes)?;
         Ok(torrent)
     }
 
@@ -88,15 +66,11 @@ impl TorrentMetaData {
         let main_url = self.announce.clone();
         trackers.insert(main_url);
 
-        if let Some(secondary_urls) = &self.announce_list {
-            for sub_url in secondary_urls {
-                for url in sub_url {
-                    trackers.insert(url.clone());
-                }
+        self.announce_list.iter().flatten().for_each(|x| {
+            for url in x.iter() {
+                trackers.insert(url.clone());
             }
-        } else {
-            println!("No secondary URLs found."); // Debug print
-        }
+        });
         trackers.into_iter().collect()
     }
 
@@ -108,10 +82,11 @@ impl TorrentMetaData {
     /// Gets pieces hashes stored in Info
     pub fn get_pieces_hashes(&self) -> Vec<[u8; 20]> {
         let pieces_bytes = self.info.pieces.as_ref();
-        println!("length of pieces data: {}", pieces_bytes.len());
+
         if pieces_bytes.len() % 20 != 0 {
             panic!("The length of the pieces string is not a multiple of 20");
         }
+
         pieces_bytes
             .chunks(20)
             .map(|chunk| {

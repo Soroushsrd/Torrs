@@ -23,7 +23,6 @@ const PIECE_TIMEOUT: Duration = Duration::from_secs(30);
 
 //TODO: Add TorrentError to this module
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MagnetInfo {
     pub info_hash: [u8; 20],
     pub display_name: Option<String>,
@@ -47,10 +46,9 @@ pub struct MetaDataMessage {
     total_size: Option<i64>,
 }
 
-#[allow(dead_code)]
 impl MagnetInfo {
     pub async fn to_torrent_metadata(&self) -> Result<TorrentMetaData, Box<dyn std::error::Error>> {
-        let mut all_peers = Vec::new();
+        let mut all_peers = HashSet::new();
 
         println!(
             "Attempting to get peers from {} trackers",
@@ -60,8 +58,9 @@ impl MagnetInfo {
             println!("Trying tracker: {}", tracker);
             match request_tracker(tracker, &self.info_hash, 0).await {
                 Ok(peers) => {
-                    println!("Got {} peers from tracker {}", peers.len(), tracker);
-                    all_peers.extend(peers);
+                    peers.iter().for_each(|x| {
+                        all_peers.insert(x.clone());
+                    });
                 }
                 Err(e) => {
                     println!("Failed to get peers from tracker {}: {}", tracker, e);
@@ -89,11 +88,13 @@ impl MagnetInfo {
             .into()),
         }
     }
+
     pub async fn fetch_metadata_from_peer(
         &self,
         peer_info: &PeerInfo,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let mut peer = Peer::new(peer_info.ip.clone(), peer_info.port);
+
         match peer.connect().await {
             Ok(_) => println!(
                 "Connected to peer: {}:{}",
@@ -127,7 +128,7 @@ impl MagnetInfo {
         };
 
         let handshake_bytes = serde_bencode::to_bytes(&handshake_msg).unwrap();
-        println!("Handshake Bytes: {:?}", handshake_bytes.clone());
+
         self.send_extension_message(&mut peer, EXTENSION_HANDSHAKE_ID as u8, &handshake_bytes)
             .await?;
 
@@ -154,27 +155,14 @@ impl MagnetInfo {
         let mut metadata = vec![0u8; metadata_size as usize];
 
         for piece in 0..num_pieces {
-            let msg = MetaDataMessage {
-                msg_type: 0, // request
-                piece,
-                total_size: None,
-            };
-
-            let msg_bytes = serde_bencode::to_bytes(&msg)?;
-            self.send_extension_message(&mut peer, METADATA_EXTENSION_ID as u8, &msg_bytes)
-                .await?;
-
-            // Wait for piece response
-            let piece_data = timeout(PIECE_TIMEOUT, peer.receive_msg()).await??;
-
-            if piece_data[0] != 20 {
-                return Err("Invalid metadata piece response".into());
-            }
-
-            // Extract and validate piece data
             let start = piece as usize * METADATA_PIECE_SIZE;
             let end = std::cmp::min(start + METADATA_PIECE_SIZE, metadata_size as usize);
-            metadata[start..end].copy_from_slice(&piece_data[2..end - start + 2]);
+
+            let piece_data = self
+                .get_piece_resp(piece, &mut peer, metadata_size, start, end)
+                .await?;
+
+            metadata[start..end].copy_from_slice(&piece_data);
         }
 
         // Verify metadata hash matches info_hash
@@ -189,9 +177,39 @@ impl MagnetInfo {
 
         Ok(metadata)
     }
+
+    async fn get_piece_resp(
+        &self,
+        piece: i64,
+        peer: &mut Peer,
+        metadata_size: i64,
+        start: usize,
+        end: usize,
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let msg = MetaDataMessage {
+            msg_type: 0, // request
+            piece,
+            total_size: None,
+        };
+
+        let msg_bytes = serde_bencode::to_bytes(&msg)?;
+        self.send_extension_message(peer, METADATA_EXTENSION_ID as u8, &msg_bytes)
+            .await?;
+
+        // Wait for piece response
+        let piece_data = timeout(PIECE_TIMEOUT, peer.receive_msg()).await??;
+
+        if piece_data[0] != 20 {
+            return Err("Invalid metadata piece response".into());
+        }
+
+        // Extract and validate piece data
+        Ok(piece_data[2..end - start + 2].to_vec())
+    }
+
     pub async fn fetch_metadata_from_peers(
         &self,
-        peers: &[PeerInfo],
+        peers: &HashSet<PeerInfo>,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         let max_concurrent = 10;
 
@@ -254,6 +272,7 @@ impl MagnetInfo {
         peer.send_msg(&message).await?;
         Ok(())
     }
+
     /// parses the link to extract info-hash, display-name(optiona), tracker urls and peer info!
     pub fn parse(magnet_url: &str) -> Result<MagnetInfo, Box<dyn std::error::Error>> {
         let url = Url::parse(magnet_url)?;
@@ -505,24 +524,4 @@ mod tests {
             }
         }
     }
-
-    //#[tokio::test]
-    //async fn test_magnet_download() {
-    //    let magnet = "magnet:?xt=urn:btih:c0084178f6df4d5d11f87e61f0f84c6de0c72993&dn=MomWantsToBreed%2024%2012%2020%20Alexis%20Malone%20Stepmom%20Only%20Says%20Yes%20XXX%20480p%20MP4-XXX%20[XC]&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.cyberia.is%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.birkenwald.de%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.moeking.me%3A6969%2Fannounce&tr=udp%3A%2F%2Fipv4.tracker.harry.lu%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.tiny-vps.com%3A6969%2Fannounce";
-    //
-    //    let magnet_info = MagnetInfo::parse(magnet).expect("Failed to parse magnet link");
-    //    println!("Successfully parsed magnet link");
-    //    println!("Display name: {:?}", magnet_info.display_name);
-    //    println!("Number of trackers: {}", magnet_info.trackers.len());
-    //
-    //    let output_dir = "./test_downloads";
-    //
-    //    match magnet_info.download(output_dir).await {
-    //        Ok(_) => println!("Download completed successfully"),
-    //        Err(e) => {
-    //            println!("Download failed: {}", e);
-    //            panic!("Download test failed");
-    //        }
-    //    }
-    //}
 }

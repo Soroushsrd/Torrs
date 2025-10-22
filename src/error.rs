@@ -99,3 +99,9 @@ impl From<reqwest::Error> for TorrentError {
         }
     }
 }
+
+impl From<serde_json::error::Error> for TorrentError {
+    fn from(value: serde_json::error::Error) -> Self {
+        TorrentError::InvalidTorrentFile(value.to_string())
+    }
+}
