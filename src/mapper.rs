@@ -5,7 +5,6 @@ use serde_bytes::ByteBuf;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::HashMap;
-use std::path::Path;
 
 /// Stores length and path parameters in a torrent file
 #[derive(Serialize, Deserialize, Debug)]
@@ -32,6 +31,7 @@ pub struct TorrentInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TorrentMetaData {
     announce: String,
+    // TODO: flatten this one
     #[serde(rename = "announce-list")]
     announce_list: Option<Vec<Vec<String>>>,
     azureus_properties: Option<HashMap<String, i64>>,
@@ -48,14 +48,11 @@ pub struct TorrentMetaData {
 
 impl TorrentMetaData {
     pub fn calculate_total_pieces(&self) -> u32 {
-        let piece_bytes = self.info.pieces.as_ref();
-        let total = piece_bytes.len() / 20;
-        total as u32
+        return (self.info.pieces.len() / 20) as u32;
     }
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
     pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData> {
-        let file_path = Path::new(path);
-        let bytes = std::fs::read(file_path)?;
+        let bytes = std::fs::read(path)?;
         let torrent: TorrentMetaData = serde_bencode::from_bytes(&bytes)?;
         Ok(torrent)
     }
@@ -63,13 +60,10 @@ impl TorrentMetaData {
     /// gets tracker urls
     pub fn get_tracker_url(&self) -> Vec<String> {
         let mut trackers = LinkedHashSet::new();
-        let main_url = self.announce.clone();
-        trackers.insert(main_url);
+        trackers.insert(self.announce.clone());
 
         self.announce_list.iter().flatten().for_each(|x| {
-            for url in x.iter() {
-                trackers.insert(url.clone());
-            }
+            let _ = x.iter().map(|url| trackers.insert(url.clone()));
         });
         trackers.into_iter().collect()
     }
