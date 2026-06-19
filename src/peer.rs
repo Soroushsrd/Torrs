@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -10,17 +11,17 @@ use tokio::time::timeout;
 use crate::error::{Result, TorrentError};
 use crate::mapper::TorrentMetaData;
 
-//TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
+// TODO: have to modify the mapper to optionally look for some fields but otherwise ignore them if
 //they dont exist!
-//TODO: Go through the downloading process once again and implement multi threading
-//TODO: Should start the downloading process once it has found a peer with the right bitfields
+// TODO: Go through the downloading process once again and implement multi threading
+// TODO: Should start the downloading process once it has found a peer with the right bitfields
 //then run the rest of the process in the background
-//TODO: Add rarest first algo to download the pieces that fewer peers have first
-//TODO: Refactor getting piece availability to be dynamically called instead of once at the
+// TODO: Add rarest first algo to download the pieces that fewer peers have first
+// TODO: Refactor getting piece availability to be dynamically called instead of once at the
 //beginning
-//TODO: Skip pieces that fail to be downloaded- must have them saved somewhere to download them
+// TODO: Skip pieces that fail to be downloaded- must have them saved somewhere to download them
 //later on
-//TODO: Add piece verification
+// TODO: Add piece verification
 
 #[derive(Debug, Clone)]
 pub enum PeerMessage {
@@ -52,22 +53,13 @@ pub enum PeerMessage {
     },
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Hash)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Hash, PartialEq, Eq)]
 pub struct PeerInfo {
     pub ip: String,
     pub port: u16,
 }
 
-// TODO: comparing strings is stupid! fix it
-impl PartialEq for PeerInfo {
-    fn eq(&self, other: &Self) -> bool {
-        self.ip == other.ip
-    }
-}
-
-impl Eq for PeerInfo {}
-
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Peer {
     pub peer_info: PeerInfo,
     stream: Option<TcpStream>,
@@ -91,11 +83,9 @@ impl PieceDownloader {
             .into_iter()
             .map(|peer_info| Peer {
                 peer_info,
-                stream: None,
-                bitfields: None,
                 is_choked: true,
                 is_interested: false,
-                piece_availability: HashSet::new(),
+                ..Default::default()
             })
             .collect();
 
@@ -108,6 +98,7 @@ impl PieceDownloader {
     }
     // a method to initialize all peer connections and gather piece availability
     // should be called first so that we could run get_piece_availability on peers
+    // TODO: redundant?
     pub async fn initialize_peers(&mut self) -> Result<()> {
         let mut successful_connections = 0;
 
@@ -157,7 +148,7 @@ impl PieceDownloader {
         &mut self,
         index: u32,
         piece_length: u32,
-        file_path: &str,
+        file_path: &PathBuf,
         total_pieces: u32,
     ) -> Result<()> {
         let mut offset = 0;
@@ -215,14 +206,14 @@ impl PieceDownloader {
     pub async fn download_torrent(
         &mut self,
         torrent: &TorrentMetaData,
-        output_dir: &str,
+        output_dir: &PathBuf,
     ) -> Result<()> {
         self.initialize_peers().await?;
 
         let piece_length = torrent.get_pieces_length() as u32;
         let total_pieces = torrent.calculate_total_pieces();
 
-        let temp_dir = format!("{}/temp_pieces", output_dir);
+        let temp_dir = output_dir.join("temp_pieces");
         tokio::fs::create_dir_all(&temp_dir).await?;
 
         let mut downloaded_pieces = HashSet::new();
@@ -245,7 +236,7 @@ impl PieceDownloader {
                 piece_length
             };
 
-            let temp_piece_path = format!("{}/piece_{}", temp_dir, piece_index);
+            let temp_piece_path = temp_dir.join(format!("piece_{}", piece_index));
 
             if let Some(peer_indices) = piece_availability.get(&piece_index) {
                 let mut success = false;
@@ -286,15 +277,15 @@ impl PieceDownloader {
     }
     pub async fn assemble_files(
         torrent: &TorrentMetaData,
-        temp_dir: &str,
-        output_dir: &str,
+        temp_dir: &PathBuf,
+        output_dir: &PathBuf,
     ) -> Result<()> {
         let piece_length = torrent.get_pieces_length() as u64;
         let file_structure = torrent.get_file_structure();
         let mut absolute_offset = 0u64;
 
         for (file_path, file_length) in file_structure {
-            let full_path = format!("{}/{}", output_dir, file_path);
+            let full_path = output_dir.join(file_path);
 
             if let Some(parent) = std::path::Path::new(&full_path).parent() {
                 tokio::fs::create_dir_all(parent).await?;
@@ -313,7 +304,7 @@ impl PieceDownloader {
                 let current_piece = (absolute_offset / piece_length) as u32;
                 let offset_in_piece = absolute_offset % piece_length;
 
-                let piece_path = format!("{}/piece_{}", temp_dir, current_piece);
+                let piece_path = temp_dir.join(format!("piece_{current_piece}"));
                 let piece_data = tokio::fs::read(&piece_path).await?;
 
                 let bytes_remaining_in_piece = piece_data.len() as u64 - offset_in_piece;
@@ -525,7 +516,7 @@ impl Peer {
         index: u32,
         piece_length: u32,
         start_offset: u32,
-        file_path: &str,
+        file_path: &PathBuf,
     ) -> Result<u32> {
         if !self.is_interested {
             self.send_interested().await?;
@@ -544,7 +535,7 @@ impl Peer {
                 .await
                 .map_err(|e| match e.kind() {
                     std::io::ErrorKind::PermissionDenied => {
-                        TorrentError::PermissionDenied(file_path.to_string())
+                        TorrentError::PermissionDenied(file_path.to_string_lossy().to_string())
                     }
                     _ => TorrentError::IoError(e),
                 })?
@@ -757,12 +748,7 @@ mod tests {
         let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
 
         let torrent_path = std::path::Path::new(path);
-        let output_dir = torrent_path
-            .parent()
-            .unwrap()
-            .join("downloads")
-            .to_string_lossy()
-            .to_string();
+        let output_dir = torrent_path.parent().unwrap().join("downloads");
 
         match downloader
             .download_torrent(&torrent_meta_data, &output_dir)
