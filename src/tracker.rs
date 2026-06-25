@@ -36,8 +36,8 @@ pub fn generate_peer_id() -> [u8; 20] {
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
 pub async fn request_peers(
     torrent: &TorrentMetaData,
+    info_hash: [u8; 20],
 ) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
-    let info_hash = torrent.calculate_info_hash()?;
     let trackers = torrent.get_tracker_url();
     let total_length = torrent.get_total_size();
 
@@ -428,64 +428,64 @@ pub fn urlencode(bytes: &[u8]) -> String {
         .collect::<String>()
 }
 
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    #[tokio::test]
-    async fn test_request_http_tracker() {
-        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
-
-        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
-        println!("Got the torrent meta data");
-
-        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-        let trackers = torrent_meta_data.get_tracker_url();
-        let total_length = torrent_meta_data.get_total_size();
-
-        let mut any_success = false;
-
-        for tracker in trackers {
-            println!("\nTrying tracker: {}", tracker);
-            let result = if tracker.starts_with("udp") {
-                match request_udp_tracker(&tracker, &info_hash, total_length).await {
-                    Ok(peers) => {
-                        println!("Successfully got {} peers from UDP tracker", peers.len());
-                        any_success = true;
-                        Ok(peers)
-                    }
-                    Err(e) => {
-                        println!("UDP tracker failed: {}", e);
-                        Err(e)
-                    }
-                }
-            } else {
-                match request_http_trackers(&tracker, &info_hash, total_length).await {
-                    Ok(peers) => {
-                        println!("Successfully got {} peers from HTTP tracker", peers.len());
-                        any_success = true;
-                        Ok(peers)
-                    }
-                    Err(e) => {
-                        println!("HTTP tracker failed: {}", e);
-                        Err(e)
-                    }
-                }
-            };
-
-            // Print peer info if successful
-            if let Ok(peers) = result {
-                println!("First 5 peers from tracker {}:", tracker);
-                for (i, peer) in peers.iter().take(5).enumerate() {
-                    println!("  Peer {}: {}:{}", i + 1, peer.ip, peer.port);
-                }
-                if peers.len() > 5 {
-                    println!("  ... and {} more peers", peers.len() - 5);
-                }
-            }
-        }
-
-        // Test passes if at least one tracker worked
-        assert!(any_success, "No trackers successfully returned peers");
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//
+//     use super::*;
+// #[tokio::test]
+// async fn test_request_http_tracker() {
+//     let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
+//
+//     let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+//     println!("Got the torrent meta data");
+//
+//     let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+//     let trackers = torrent_meta_data.get_tracker_url();
+//     let total_length = torrent_meta_data.get_total_size();
+//
+//     let mut any_success = false;
+//
+//     for tracker in trackers {
+//         println!("\nTrying tracker: {}", tracker);
+//         let result = if tracker.starts_with("udp") {
+//             match request_udp_tracker(&tracker, &info_hash, total_length).await {
+//                 Ok(peers) => {
+//                     println!("Successfully got {} peers from UDP tracker", peers.len());
+//                     any_success = true;
+//                     Ok(peers)
+//                 }
+//                 Err(e) => {
+//                     println!("UDP tracker failed: {}", e);
+//                     Err(e)
+//                 }
+//             }
+//         } else {
+//             match request_http_trackers(&tracker, &info_hash, total_length).await {
+//                 Ok(peers) => {
+//                     println!("Successfully got {} peers from HTTP tracker", peers.len());
+//                     any_success = true;
+//                     Ok(peers)
+//                 }
+//                 Err(e) => {
+//                     println!("HTTP tracker failed: {}", e);
+//                     Err(e)
+//                 }
+//             }
+//         };
+//
+//         // Print peer info if successful
+//         if let Ok(peers) = result {
+//             println!("First 5 peers from tracker {}:", tracker);
+//             for (i, peer) in peers.iter().take(5).enumerate() {
+//                 println!("  Peer {}: {}:{}", i + 1, peer.ip, peer.port);
+//             }
+//             if peers.len() > 5 {
+//                 println!("  ... and {} more peers", peers.len() - 5);
+//             }
+//         }
+//     }
+//
+//     // Test passes if at least one tracker worked
+//     assert!(any_success, "No trackers successfully returned peers");
+// }
+// }

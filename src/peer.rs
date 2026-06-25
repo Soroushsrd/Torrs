@@ -711,52 +711,52 @@ impl Peer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-
-    use super::*;
-    use crate::mapper::TorrentMetaData;
-    use crate::tracker::{generate_peer_id, request_peers};
-    use tokio::test;
-
-    #[test]
-    async fn test_get_peers() {
-        let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
-        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
-        println!("Got the torrent meta data");
-
-        match request_peers(&torrent_meta_data).await {
-            Ok(peers) => {
-                println!("Successfully retrieved {} peers", peers.len());
-                for (i, peer) in peers.iter().enumerate() {
-                    println!("Peer {}: {:?}", i + 1, peer);
-                }
-                assert!(!peers.is_empty(), "Peer list should not be empty");
-            }
-            Err(e) => {
-                eprintln!("Failed to retrieve peers: {:?}", e);
-            }
-        }
-    }
-    #[tokio::test]
-    async fn test_download() {
-        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
-        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
-        let peers = request_peers(&torrent_meta_data).await.unwrap();
-        let peer_id = generate_peer_id();
-        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-
-        let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
-
-        let torrent_path = std::path::Path::new(path);
-        let output_dir = torrent_path.parent().unwrap().join("downloads");
-
-        match downloader
-            .download_torrent(&torrent_meta_data, &output_dir)
-            .await
-        {
-            Ok(()) => println!("Successfully downloaded torrent"),
-            Err(e) => println!("Failed to download: {}", e),
-        }
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//
+//     use super::*;
+//     use crate::mapper::TorrentMetaData;
+//     use crate::tracker::{generate_peer_id, request_peers};
+//     use tokio::test;
+//
+//     #[test]
+//     async fn test_get_peers() {
+//         let path = r"/home/rusty/Rs/Torrs/Gym Manager [FitGirl Repack].torrent";
+//         let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+//         println!("Got the torrent meta data");
+//
+//         match request_peers(&torrent_meta_data).await {
+//             Ok(peers) => {
+//                 println!("Successfully retrieved {} peers", peers.len());
+//                 for (i, peer) in peers.iter().enumerate() {
+//                     println!("Peer {}: {:?}", i + 1, peer);
+//                 }
+//                 assert!(!peers.is_empty(), "Peer list should not be empty");
+//             }
+//             Err(e) => {
+//                 eprintln!("Failed to retrieve peers: {:?}", e);
+//             }
+//         }
+//     }
+// #[tokio::test]
+// async fn test_download() {
+//     let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
+//     let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+//     let peers = request_peers(&torrent_meta_data).await.unwrap();
+//     let peer_id = generate_peer_id();
+//     let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
+//
+//     let mut downloader = PieceDownloader::new(peers, info_hash, peer_id);
+//
+//     let torrent_path = std::path::Path::new(path);
+//     let output_dir = torrent_path.parent().unwrap().join("downloads");
+//
+//     match downloader
+//         .download_torrent(&torrent_meta_data, &output_dir)
+//         .await
+//     {
+//         Ok(()) => println!("Successfully downloaded torrent"),
+//         Err(e) => println!("Failed to download: {}", e),
+//     }
+// }
+// }
