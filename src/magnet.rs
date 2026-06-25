@@ -109,8 +109,6 @@ impl MagnetInfo {
             ),
         }
 
-        let mut extension_bits = [0u8; 8];
-        extension_bits[5] |= 0x10;
         let peer_id = generate_peer_id();
 
         match peer.handshake(self.info_hash, peer_id).await {
@@ -158,9 +156,7 @@ impl MagnetInfo {
             let start = piece as usize * METADATA_PIECE_SIZE;
             let end = std::cmp::min(start + METADATA_PIECE_SIZE, metadata_size as usize);
 
-            let piece_data = self
-                .get_piece_resp(piece, &mut peer, metadata_size, start, end)
-                .await?;
+            let piece_data = self.get_piece_resp(piece, &mut peer, start, end).await?;
 
             metadata[start..end].copy_from_slice(&piece_data);
         }
@@ -182,7 +178,6 @@ impl MagnetInfo {
         &self,
         piece: i64,
         peer: &mut Peer,
-        metadata_size: i64,
         start: usize,
         end: usize,
     ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -244,13 +239,12 @@ impl MagnetInfo {
                 *metadata_count.entry(metadata_hash).or_insert(0) += 1
             }
         }
-        if let Some((most_common_hash, _)) = metadata_count.iter().max_by_key(|&(_, count)| count) {
-            if let Some((_, metadata)) = valid_metadata
+        if let Some((most_common_hash, _)) = metadata_count.iter().max_by_key(|&(_, count)| count)
+            && let Some((_, metadata)) = valid_metadata
                 .iter()
                 .find(|(hash, _)| hash == most_common_hash)
-            {
-                return Ok(metadata.clone());
-            }
+        {
+            return Ok(metadata.clone());
         }
         Err("failed to get consistent emtadata from peers".into())
     }
@@ -493,7 +487,7 @@ mod tests {
         let magnet_info = MagnetInfo::parse(magnet).unwrap();
         println!("Getting the peers from trackers...");
 
-        let mut peers = Vec::new();
+        let mut peers = HashSet::new();
         for tracker in &magnet_info.trackers {
             match request_tracker(tracker, &magnet_info.info_hash, 0).await {
                 Ok(peer_vec) => {
@@ -506,8 +500,6 @@ mod tests {
                 }
             }
         }
-        peers.sort_by_key(|p| (p.ip.clone(), p.port));
-        peers.dedup_by_key(|p| (p.ip.clone(), p.port));
 
         if peers.is_empty() {
             panic!("could not find any peers");

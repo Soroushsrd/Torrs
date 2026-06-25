@@ -1,10 +1,13 @@
 use crate::error::*;
-use linked_hash_set::LinkedHashSet;
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha1::Digest;
 use sha1::Sha1;
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::path::Path;
+
+const PIECE_HASH_LEN: usize = 20;
 
 /// Stores length and path parameters in a torrent file
 #[derive(Serialize, Deserialize, Debug)]
@@ -30,42 +33,42 @@ pub struct TorrentInfo {
 /// Stores the Actual MetaData of a torrent file
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TorrentMetaData {
-    announce: String,
-    // TODO: flatten this one
-    #[serde(rename = "announce-list")]
+    #[serde(default)]
+    announce: Option<String>,
+    #[serde(rename = "announce-list", default)]
     announce_list: Option<Vec<Vec<String>>>,
     azureus_properties: Option<HashMap<String, i64>>,
-    #[serde(rename = "created by")]
-    created_by: String,
-    #[serde(rename = "creation date")]
-    creation_date: i64,
+    #[serde(rename = "created by", default)]
+    created_by: Option<String>,
+    #[serde(rename = "creation date", default)]
+    creation_date: Option<i64>,
+    #[serde(default)]
     encoding: Option<String>,
     pub info: TorrentInfo,
     publisher: Option<String>,
-    #[serde(rename = "publisher-url")]
+    #[serde(rename = "publisher-url", default)]
     publisher_url: Option<String>,
 }
 
 impl TorrentMetaData {
     pub fn calculate_total_pieces(&self) -> u32 {
-        return (self.info.pieces.len() / 20) as u32;
+        (self.info.pieces.len() / PIECE_HASH_LEN) as u32
     }
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
-    pub fn from_trnt_file(path: &str) -> Result<TorrentMetaData> {
+    pub fn from_trnt_file(path: impl AsRef<Path>) -> Result<TorrentMetaData> {
         let bytes = std::fs::read(path)?;
-        let torrent: TorrentMetaData = serde_bencode::from_bytes(&bytes)?;
-        Ok(torrent)
+        Ok(serde_bencode::from_bytes(&bytes)?)
     }
 
     /// gets tracker urls
     pub fn get_tracker_url(&self) -> Vec<String> {
-        let mut trackers = LinkedHashSet::new();
-        trackers.insert(self.announce.clone());
-
-        self.announce_list.iter().flatten().for_each(|x| {
-            let _ = x.iter().map(|url| trackers.insert(url.clone()));
-        });
-        trackers.into_iter().collect()
+        let mut seen = HashSet::new();
+        self.announce
+            .iter()
+            .chain(self.announce_list.iter().flatten().flatten())
+            .filter(|url| seen.insert(url.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Gets the pieces length for each info
@@ -74,29 +77,29 @@ impl TorrentMetaData {
     }
 
     /// Gets pieces hashes stored in Info
-    pub fn get_pieces_hashes(&self) -> Vec<[u8; 20]> {
+    #[allow(dead_code)]
+    pub fn get_pieces_hashes(&self) -> Result<Vec<[u8; 20]>> {
         let pieces_bytes = self.info.pieces.as_ref();
 
         if pieces_bytes.len() % 20 != 0 {
-            panic!("The length of the pieces string is not a multiple of 20");
+            return Err(TorrentError::InvalidTorrentFile(
+                "piece length is not a multiple of 20".to_string(),
+            ));
         }
 
-        pieces_bytes
+        Ok(pieces_bytes
             .chunks(20)
-            .map(|chunk| {
-                let mut hash = [0u8; 20];
-                hash.copy_from_slice(chunk);
-                hash
-            })
-            .collect()
+            .map(|chunk| chunk.try_into().expect("chunk should be exactly 20 bytes"))
+            .collect())
     }
 
     /// Gets the total size of files in a torrent file
     pub fn get_total_size(&self) -> i64 {
-        if let Some(files) = &self.info.files {
-            return files.iter().map(|file| file.length).sum();
-        }
-        self.info.length.unwrap_or(0)
+        self.info
+            .files
+            .as_ref()
+            .map(|s| s.iter().map(|f| f.length).sum())
+            .unwrap_or_else(|| self.info.length.unwrap_or(0))
     }
 
     /// Gets the file structure for later use

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -23,7 +23,7 @@ use crate::mapper::TorrentMetaData;
 //later on
 // TODO: Add piece verification
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum PeerMessage {
     KeepAlive,
     Choke,
@@ -36,6 +36,7 @@ pub enum PeerMessage {
     BitField {
         bitfield: Vec<u8>,
     },
+    #[allow(dead_code)]
     Request {
         index: u32,
         begin: u32,
@@ -46,6 +47,7 @@ pub enum PeerMessage {
         begin: u32,
         block: Vec<u8>,
     },
+    #[allow(dead_code)]
     Cancel {
         index: u32,
         begin: u32,
@@ -206,7 +208,7 @@ impl PieceDownloader {
     pub async fn download_torrent(
         &mut self,
         torrent: &TorrentMetaData,
-        output_dir: &PathBuf,
+        output_dir: &Path,
     ) -> Result<()> {
         self.initialize_peers().await?;
 
@@ -277,8 +279,8 @@ impl PieceDownloader {
     }
     pub async fn assemble_files(
         torrent: &TorrentMetaData,
-        temp_dir: &PathBuf,
-        output_dir: &PathBuf,
+        temp_dir: &Path,
+        output_dir: &Path,
     ) -> Result<()> {
         let piece_length = torrent.get_pieces_length() as u64;
         let file_structure = torrent.get_file_structure();
@@ -429,15 +431,14 @@ impl Peer {
         match timeout(Duration::from_secs(5), connect_future).await {
             Ok(Ok(stream)) => {
                 self.stream = Some(stream);
-                println!("Successfully connected to stream: {}", address);
+                println!("Successfully connected to stream: {address}");
                 Ok(())
             }
-            Ok(Err(e)) => Err(TorrentError::ConnectionFailed(
-                format!("Connection error to peer {}: {}", address, e).into(),
-            )),
+            Ok(Err(e)) => Err(TorrentError::ConnectionFailed(format!(
+                "Connection error to peer {address}: {e}"
+            ))),
             Err(_) => Err(TorrentError::ConnectionTimedOut(format!(
-                "Connection timeout to {}",
-                address
+                "Connection timeout to {address}"
             ))),
         }
     }

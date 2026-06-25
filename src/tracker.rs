@@ -12,10 +12,8 @@ use url::Url;
 const UDP_TIMEOUT: Duration = Duration::from_secs(10);
 
 //TODO: Add TorrentError to this module
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct TrackerResponse {
-    interval: Option<i64>,
     #[serde(default)]
     peer: Vec<PeerInfo>,
     #[serde(rename = "peers", default)]
@@ -36,7 +34,6 @@ pub fn generate_peer_id() -> [u8; 20] {
 }
 
 /// Request Peers in order to get the Peer Info that is needed to establish connections.
-#[allow(dead_code)]
 pub async fn request_peers(
     torrent: &TorrentMetaData,
 ) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {

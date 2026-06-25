@@ -1,7 +1,6 @@
 use std::fmt;
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum TorrentError {
     // Network errors
     ConnectionTimedOut(String),
