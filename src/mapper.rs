@@ -1,5 +1,6 @@
 use crate::error::*;
 use serde::{Deserialize, Serialize};
+use serde_bencode::value::Value;
 use serde_bytes::ByteBuf;
 use sha1::Digest;
 use sha1::Sha1;
@@ -51,13 +52,17 @@ pub struct TorrentMetaData {
 }
 
 impl TorrentMetaData {
-    pub fn calculate_total_pieces(&self) -> u32 {
-        (self.info.pieces.len() / PIECE_HASH_LEN) as u32
+    pub fn from_bytes(raw: &[u8]) -> Result<TorrentMetaData> {
+        Ok(serde_bencode::from_bytes(&raw)?)
     }
+
     /// Reads a torrent file and maps ints data to a TorrentMetaData format
     pub fn from_trnt_file(path: impl AsRef<Path>) -> Result<TorrentMetaData> {
         let bytes = std::fs::read(path)?;
         Ok(serde_bencode::from_bytes(&bytes)?)
+    }
+    pub fn calculate_total_pieces(&self) -> u32 {
+        (self.info.pieces.len() / PIECE_HASH_LEN) as u32
     }
 
     /// gets tracker urls
@@ -113,59 +118,108 @@ impl TorrentMetaData {
             vec![(self.info.name.clone(), self.info.length.unwrap_or(0))]
         }
     }
+}
 
-    /// Calculates the complete info hash
-    pub fn calculate_info_hash(&self) -> Result<[u8; 20]> {
-        let info_bencoded = serde_bencode::to_bytes(&self.info)?;
-        let mut hasher = Sha1::new();
-        hasher.update(&info_bencoded);
-        Ok(hasher.finalize().into())
-    }
+/// Calculates the complete info hash
+/// Info bytes is the same byte data that is read through std::fs::read(path)
+pub fn calculate_info_hash(raw: &[u8]) -> Result<[u8; 20]> {
+    let info_bytes = extract_info_bytes(raw)?;
+    let mut hasher = Sha1::new();
+    hasher.update(&info_bytes);
+    Ok(hasher.finalize().into())
+}
+fn extract_info_bytes(raw: &[u8]) -> Result<Vec<u8>> {
+    let value: Value = serde_bencode::from_bytes(raw)?;
+    let Value::Dict(dict) = value else {
+        return Err(TorrentError::InvalidTorrentFile("not a dict".into()));
+    };
+    let info = dict
+        .get(b"info".as_slice())
+        .ok_or_else(|| TorrentError::InvalidTorrentFile("no info key".into()))?;
+    Ok(serde_bencode::to_bytes(info)?)
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::tracker::urlencode;
 
     use super::*;
 
-    macro_rules! test_torrent {
-        ($name:ident,$method:ident) => {
-            #[test]
-            fn $name() {
-                let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
-                let result = TorrentMetaData::from_trnt_file(path).unwrap();
-                let output = result.$method();
-
-                println!("{}: {:?}", stringify!($method), output);
-            }
-        };
+    fn load_test_torrent() -> TorrentMetaData {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/ubuntu.iso.torrent");
+        TorrentMetaData::from_trnt_file(path).unwrap()
     }
 
     #[test]
-    fn test_from_file() {
-        let path = "/home/rusty/Codes/Fun/Torrs/Violet [FitGirl Repack].torrent";
-        let result = TorrentMetaData::from_trnt_file(path).unwrap();
-        println!("torrent file publishe: {:?}", result.publisher)
+    fn metadata_announce() {
+        let result = load_test_torrent();
+        assert_eq!(
+            &result.announce.unwrap(),
+            "https://torrent.ubuntu.com/announce"
+        );
+    }
+    #[test]
+    fn metadata_total_pieces_count() {
+        let result = load_test_torrent();
+        let total = result.calculate_total_pieces();
+        assert_eq!(total, 24868);
+    }
+    #[test]
+    fn metadata_info_hash() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/ubuntu.iso.torrent");
+        let bytes = std::fs::read(path).unwrap();
+        let hash = calculate_info_hash(&bytes).unwrap();
+        assert_eq!(
+            hex::encode(hash),
+            "dafc8c076ca2f3ed376eeae7c76a0d6be2415c45",
+        );
     }
 
-    test_torrent!(test_get_pieces_length, get_pieces_length);
-    test_torrent!(test_get_file_structure, get_file_structure);
-    test_torrent!(test_get_tracker_url, get_tracker_url);
-    test_torrent!(test_get_total_size, get_total_size);
-    test_torrent!(test_get_pieces_hashes, get_pieces_hashes);
-    test_torrent!(test_hash_info, calculate_info_hash);
-    #[tokio::test]
-    async fn debug_info_hash() {
-        let path = r"C:\Users\Lenovo\Downloads\ubuntu-24.10-desktop-amd64.iso.torrent";
-        let torrent_meta_data = TorrentMetaData::from_trnt_file(path).unwrap();
+    #[test]
+    fn metadata_piece_length() {
+        assert_eq!(load_test_torrent().get_pieces_length(), 256 * 1024);
+    }
 
-        let info_hash = torrent_meta_data.calculate_info_hash().unwrap();
-        // println!("Raw info hash bytes: {:?}", info_hash);
-        println!("URL encoded info hash: {}", urlencode(&info_hash));
-        println!(
-            "Url encoded info hash using earlier funct: {}",
-            urlencode(&info_hash)
+    #[test]
+    fn metadata_total_size() {
+        let size = load_test_torrent().get_total_size();
+        assert_eq!(size, 6518974464);
+    }
+
+    #[test]
+    fn metadata_name() {
+        assert_eq!(
+            load_test_torrent().info.name,
+            "ubuntu-26.04-desktop-amd64.iso"
         );
+    }
+
+    #[test]
+    fn metadata_tracker_url() {
+        assert_eq!(
+            load_test_torrent().get_tracker_url(),
+            vec![
+                "https://torrent.ubuntu.com/announce",
+                "https://ipv6.torrent.ubuntu.com/announce"
+            ]
+        );
+    }
+
+    #[test]
+    fn metadata_single_file_struct() {
+        let files = load_test_torrent().get_file_structure();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "ubuntu-26.04-desktop-amd64.iso");
+        assert_eq!(files[0].1, 6518974464);
+    }
+
+    #[test]
+    fn metadata_pieces_hashes() {
+        let hashes = load_test_torrent().get_pieces_hashes().unwrap();
+        assert_eq!(hashes.len(), 24868);
+    }
+
+    #[test]
+    fn metadata_file_error() {
+        assert!(TorrentMetaData::from_trnt_file("/doesntexist.torrent").is_err());
     }
 }
