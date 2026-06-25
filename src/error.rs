@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{array::TryFromSliceError, fmt};
 
 #[derive(Debug)]
 pub enum TorrentError {
@@ -7,11 +7,13 @@ pub enum TorrentError {
     ConnectionFailed(String),
     TrackerError(String),
     PeerError(String),
+    UnsupportedFormat,
 
     // protocol related errors
     InvalidHandshake(String),
     InvalidMessage(String),
     ProtocolViolation(String),
+    InvalidResponse(String),
 
     // file or io related errors
     FileNotFound(String),
@@ -23,6 +25,7 @@ pub enum TorrentError {
     InvalidTorrentFile(String),
     InvalidMagnetLink(String),
     BencodeError(serde_bencode::Error),
+    SliceConversion(std::array::TryFromSliceError),
 
     //downloading errors
     PieceVerificationFailed(u32),
@@ -38,11 +41,13 @@ impl fmt::Display for TorrentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TorrentError::ConnectionTimedOut(msg) => write!(f, "Connection Timed Out: {}", msg),
+            TorrentError::UnsupportedFormat => write!(f, "Unsupported format"),
             TorrentError::ConnectionFailed(msg) => write!(f, "Connection failed: {}", msg),
             TorrentError::TrackerError(msg) => write!(f, "Tracker error: {}", msg),
             TorrentError::PeerError(msg) => write!(f, "Peer error: {}", msg),
             TorrentError::InvalidHandshake(msg) => write!(f, "Invalid Handshake: {}", msg),
             TorrentError::InvalidMessage(msg) => write!(f, "Invalid message: {}", msg),
+            TorrentError::InvalidResponse(msg) => write!(f, "Invalid Response: {}", msg),
             TorrentError::ProtocolViolation(msg) => write!(f, "Protocol violation: {}", msg),
             TorrentError::FileNotFound(path) => write!(f, "File not found: {}", path),
             TorrentError::PermissionDenied(path) => write!(f, "Permission denied: {}", path),
@@ -51,6 +56,7 @@ impl fmt::Display for TorrentError {
             TorrentError::InvalidTorrentFile(msg) => write!(f, "Invalid torrent file: {}", msg),
             TorrentError::InvalidMagnetLink(msg) => write!(f, "Invalid magnet link: {}", msg),
             TorrentError::BencodeError(e) => write!(f, "Bencode error: {}", e),
+            TorrentError::SliceConversion(e) => write!(f, "Slice Conversion error: {}", e),
             TorrentError::PieceVerificationFailed(piece) => {
                 write!(f, "Piece {} verification failed", piece)
             }
@@ -78,6 +84,12 @@ impl From<std::io::Error> for TorrentError {
             std::io::ErrorKind::TimedOut => TorrentError::ConnectionTimedOut(value.to_string()),
             _ => TorrentError::IoError(value),
         }
+    }
+}
+
+impl From<TryFromSliceError> for TorrentError {
+    fn from(value: TryFromSliceError) -> Self {
+        TorrentError::SliceConversion(value)
     }
 }
 
