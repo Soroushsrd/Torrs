@@ -1,5 +1,7 @@
+use crate::error::{Result, TorrentError};
 use crate::mapper::*;
 use crate::peer::PeerInfo;
+
 use rand::Rng;
 use serde::Deserialize;
 use serde_bytes::ByteBuf;
@@ -10,8 +12,8 @@ use tokio::time::timeout;
 use url::Url;
 
 const UDP_TIMEOUT: Duration = Duration::from_secs(10);
+const PROTOCOL_ID: u64 = 0x0000041727101980;
 
-//TODO: Add TorrentError to this module
 #[derive(Deserialize)]
 pub struct TrackerResponse {
     #[serde(default)]
@@ -37,7 +39,7 @@ pub fn generate_peer_id() -> [u8; 20] {
 pub async fn request_peers(
     torrent: &TorrentMetaData,
     info_hash: [u8; 20],
-) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
+) -> Result<Vec<PeerInfo>> {
     let trackers = torrent.get_tracker_url();
     let total_length = torrent.get_total_size();
 
@@ -57,8 +59,14 @@ pub async fn request_peers(
                 .await
                 {
                     Ok(Ok(peers)) => Ok((tracker, peers)),
-                    Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
-                    Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
+                    Ok(Err(e)) => Err(TorrentError::ConnectionFailed(format!(
+                        "Failed to connect to tracker {}: {:?}",
+                        tracker, e
+                    ))),
+                    Err(_) => Err(TorrentError::ConnectionTimedOut(format!(
+                        "Timeout connecting to tracker {}",
+                        tracker
+                    ))),
                 }
             });
             handles.push(handle);
@@ -73,8 +81,14 @@ pub async fn request_peers(
                 .await
                 {
                     Ok(Ok(peers)) => Ok((tracker, peers)),
-                    Ok(Err(e)) => Err(format!("Failed to connect to tracker {}: {:?}", tracker, e)),
-                    Err(_) => Err(format!("Timeout connecting to tracker {}", tracker)),
+                    Ok(Err(e)) => Err(TorrentError::ConnectionFailed(format!(
+                        "Failed to connect to tracker {}: {:?}",
+                        tracker, e
+                    ))),
+                    Err(_) => Err(TorrentError::ConnectionTimedOut(format!(
+                        "Timeout connecting to tracker {}",
+                        tracker
+                    ))),
                 }
             });
 
@@ -97,19 +111,18 @@ pub async fn request_peers(
         }
     }
 
-    Err("Failed to retrieve peers from any tracker".into())
+    Err(TorrentError::PeerError(
+        "Failed to retrieve peers from any tracker".into(),
+    ))
 }
 
 /// Sending connection request with a socker
-pub async fn send_connection_request(
-    socket: &tokio::net::UdpSocket,
-) -> Result<u64, Box<dyn std::error::Error>> {
-    let protocol_id: u64 = 0x0000041727101980; // Fixed protocol ID
+pub async fn send_connection_request(socket: &tokio::net::UdpSocket) -> Result<u64> {
     let action: u32 = 0; // connect
     let transaction_id: u32 = rand::random();
 
     let mut request = Vec::with_capacity(16);
-    request.extend_from_slice(&protocol_id.to_be_bytes());
+    request.extend_from_slice(&PROTOCOL_ID.to_be_bytes());
     request.extend_from_slice(&action.to_be_bytes());
     request.extend_from_slice(&transaction_id.to_be_bytes());
 
@@ -119,17 +132,21 @@ pub async fn send_connection_request(
     let size = socket.recv(&mut response).await?;
 
     if size != 16 {
-        return Err(format!("Invalid connection response size: {}", size).into());
+        return Err(TorrentError::InvalidMessage(
+            format!("Invalid connection response size: {}", size).into(),
+        ));
     }
 
     let resp_action = u32::from_be_bytes(response[0..4].try_into()?);
     let resp_transaction_id = u32::from_be_bytes(response[4..8].try_into()?);
 
     if resp_action != 0 {
-        return Err(format!("Invalid action in connection response: {}", resp_action).into());
+        return Err(TorrentError::InvalidResponse(format!("{resp_action}")));
     }
     if resp_transaction_id != transaction_id {
-        return Err("Transaction ID mismatch in connection response".into());
+        return Err(TorrentError::InvalidResponse(
+            "Transaction ID mismatch in connection response".into(),
+        ));
     }
 
     Ok(u64::from_be_bytes(response[8..16].try_into()?))
@@ -139,9 +156,14 @@ pub async fn request_udp_tracker(
     announce: &str,
     info_hash: &[u8; 20],
     total_length: i64,
-) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
-    let url = Url::parse(announce)?;
-    let host = url.host_str().ok_or("No host in tracker URL")?;
+) -> Result<Vec<PeerInfo>> {
+    let url = match Url::parse(announce) {
+        Ok(x) => x,
+        Err(e) => return Err(TorrentError::PeerError(e.to_string())),
+    };
+    let host = url.host_str().ok_or(TorrentError::TrackerError(format!(
+        "cant find the host on {url:?}"
+    )))?;
     let port = url.port().unwrap_or(80);
 
     // Bind to an IPv4 address specifically
@@ -150,11 +172,17 @@ pub async fn request_udp_tracker(
     let mut addrs = tokio::net::lookup_host((host, port)).await?;
     let addr = addrs
         .find(|addr| addr.is_ipv4())
-        .ok_or("No IPv4 address found for tracker")?;
+        .ok_or(TorrentError::TrackerError(
+            "No IPv4 address found for tracker".into(),
+        ))?;
 
     match timeout(UDP_TIMEOUT, socket.connect(addr)).await {
         Ok(result) => result?,
-        Err(_) => return Err("UDP tracker connection timeout".into()),
+        Err(_) => {
+            return Err(TorrentError::ConnectionFailed(
+                "UDP tracker connection timeout".into(),
+            ));
+        }
     }
 
     let mut retries = 2;
@@ -167,17 +195,19 @@ pub async fn request_udp_tracker(
                 break;
             }
             Ok(Err(e)) => {
-                println!("Connection request failed, retries left {}: {}", retries, e);
+                dbg!("Connection request failed, retries left {}: {}", retries, e);
                 retries -= 1;
             }
             Err(_) => {
-                println!("Connection request timed out, retries left {}", retries);
+                dbg!("Connection request timed out, retries left {}", retries);
                 retries -= 1;
             }
         }
     }
 
-    let connection_id = connection_id.ok_or("Failed to get connection ID after retries")?;
+    let connection_id = connection_id.ok_or(TorrentError::ConnectionTimedOut(
+        "Failed to get connection ID after retries".into(),
+    ))?;
 
     let transaction_id: u32 = rand::random();
     let peer_id = generate_peer_id();
@@ -203,12 +233,12 @@ pub async fn request_udp_tracker(
         match timeout(UDP_TIMEOUT, socket.send(&request)).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                println!("Failed to send announce, retries left {}: {}", retries, e);
+                dbg!("Failed to send announce, retries left {}: {}", retries, e);
                 retries -= 1;
                 continue;
             }
             Err(_) => {
-                println!("Announce send timed out, retries left {}", retries);
+                dbg!("Announce send timed out, retries left {}", retries);
                 retries -= 1;
                 continue;
             }
@@ -219,20 +249,21 @@ pub async fn request_udp_tracker(
             Ok(Ok(size)) => {
                 response.truncate(size);
                 if size < 8 {
-                    println!("Response too short: {} bytes", size);
+                    dbg!("Response too short: {} bytes", size);
                     retries -= 1;
                     continue;
                 }
 
                 let action = u32::from_be_bytes(response[0..4].try_into()?);
                 let resp_transaction_id = u32::from_be_bytes(response[4..8].try_into()?);
-                println!(
+                dbg!(
                     "Response action: {}, transaction_id: {}",
-                    action, resp_transaction_id
+                    action,
+                    resp_transaction_id
                 );
 
                 if resp_transaction_id != transaction_id {
-                    println!("Transaction ID mismatch");
+                    dbg!("Transaction ID mismatch");
                     retries -= 1;
                     continue;
                 }
@@ -243,9 +274,11 @@ pub async fn request_udp_tracker(
                         let leechers = u32::from_be_bytes(response[12..16].try_into()?);
                         let seeders = u32::from_be_bytes(response[16..20].try_into()?);
 
-                        println!(
+                        dbg!(
                             "Success! Interval: {}s, Leechers: {}, Seeders: {}",
-                            interval, leechers, seeders
+                            interval,
+                            leechers,
+                            seeders
                         );
 
                         let mut peers = Vec::new();
@@ -261,7 +294,7 @@ pub async fn request_udp_tracker(
                     }
                     2 => {
                         // Scrape response
-                        println!("Got scrape response, trying announce again...");
+                        dbg!("Got scrape response, trying announce again...");
 
                         let mut announce_request = Vec::with_capacity(98);
                         announce_request.extend_from_slice(&connection_id.to_be_bytes());
@@ -292,7 +325,9 @@ pub async fn request_udp_tracker(
                         retry_response.truncate(retry_size);
 
                         if retry_size < 20 {
-                            return Err("Retry size too short for announce".into());
+                            return Err(TorrentError::InvalidMessage(
+                                "Retry size too short for announce".into(),
+                            ));
                         }
                         let retry_action = u32::from_be_bytes(retry_response[0..4].try_into()?);
                         if retry_action == 1 {
@@ -311,61 +346,63 @@ pub async fn request_udp_tracker(
                             }
                             return Ok(peers);
                         } else {
-                            return Err(
-                                "Failed to get proper announce response after scrape".into()
-                            );
+                            return Err(TorrentError::InvalidMessage(
+                                "Failed to get proper announce response after scrape".into(),
+                            ));
                         };
                     }
                     3 => {
                         // Error
                         let error_msg = String::from_utf8_lossy(&response[8..]);
-                        println!("Got error response: {}", error_msg);
+                        dbg!("Got error response: {error_msg}");
                         retries -= 1;
                         continue;
                     }
                     _ => {
-                        println!("Got unexpected action: {}", action);
+                        dbg!("Got unexpected action: {action}");
                         retries -= 1;
                         continue;
                     }
                 }
             }
             Ok(Err(e)) => {
-                println!(
-                    "Failed to receive announce response, retries left {}: {}",
-                    retries, e
-                );
+                dbg!("Failed to receive announce response, retries left {retries}: {e}");
                 retries -= 1;
             }
             Err(_) => {
-                println!("Announce receive timed out, retries left {}", retries);
+                dbg!("Announce receive timed out, retries left {retries}");
                 retries -= 1;
             }
         }
     }
 
-    Err("Failed to get valid response after retries".into())
+    Err(TorrentError::InvalidResponse(
+        "Failed to get valid response after retries".into(),
+    ))
 }
 /// Request trackers from http and udp origins
 pub async fn request_tracker(
     announce: &str,
     info_hash: &[u8; 20],
     total_length: i64,
-) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
+) -> Result<Vec<PeerInfo>> {
     if announce.starts_with("udp://") {
         return request_udp_tracker(announce, info_hash, total_length).await;
     } else if announce.starts_with("http://") || announce.starts_with("https://") {
         return request_http_trackers(announce, info_hash, total_length).await;
     }
-    Err("Unsupported tracker protocol".into())
+    Err(TorrentError::UnsupportedFormat)
 }
 /// Request Trackers based on the info that has been parsed from torrent file.
 pub async fn request_http_trackers(
     announce: &str,
     info_hash: &[u8; 20],
     total_length: i64,
-) -> Result<Vec<PeerInfo>, Box<dyn std::error::Error>> {
-    let url = Url::parse(announce)?;
+) -> Result<Vec<PeerInfo>> {
+    let url = match Url::parse(announce) {
+        Ok(x) => x,
+        Err(e) => return Err(TorrentError::PeerError(e.to_string())),
+    };
     let peer_id = generate_peer_id();
 
     let q = format!(
@@ -379,27 +416,37 @@ pub async fn request_http_trackers(
     let response = match reqwest::get(full_url.clone()).await {
         Ok(bytes) => match bytes.bytes().await {
             Ok(byte) => byte,
-            Err(e) => return Err(format!("Failed to get a response: {}", e).into()),
+            Err(e) => {
+                return Err(TorrentError::InvalidResponse(
+                    format!("Failed to get a response: {e}").into(),
+                ));
+            }
         },
-        Err(e) => return Err(format!("Failed to connect to {}:{}", url, e).into()),
+        Err(e) => {
+            return Err(TorrentError::ConnectionFailed(
+                format!("Failed to connect to {url}:{e}").into(),
+            ));
+        }
     };
 
     if response.starts_with(b"<") {
-        return Err("Tracker returned HTML instead of bencoded data".into());
+        return Err(TorrentError::InvalidResponse(
+            "Tracker returned HTML instead of bencoded data".into(),
+        ));
     }
 
     let tracker_response: TrackerResponse = serde_bencode::de::from_bytes(&response)
-        .map_err(|e| format!("failed to decode the bytes {}", e))?;
+        .map_err(|e| TorrentError::InvalidMessage(format!("failed to decode the bytes {e}")))?;
     let peers = if !tracker_response.peer.is_empty() {
         tracker_response.peer
     } else if let Some(binary_peer) = tracker_response.peers_binary {
         parse_binary_peers(&binary_peer)
     } else {
-        return Err("No peers found in response".into());
+        return Err(TorrentError::NoAvailablePeers(0));
     };
 
     if peers.is_empty() {
-        Err("Tracker returned no peers".into())
+        Err(TorrentError::NoAvailablePeers(0))
     } else {
         Ok(peers)
     }
