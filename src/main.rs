@@ -12,6 +12,8 @@ use mapper::TorrentMetaData;
 use peer::PieceDownloader;
 use tracker::{generate_peer_id, request_peers};
 
+use crate::mapper::calculate_info_hash;
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -49,10 +51,11 @@ fn validate_output(s: &str) -> Result<PathBuf, String> {
 async fn main() -> Result<(), TorrentError> {
     let args = Args::parse();
 
-    let torrent_mta = TorrentMetaData::from_trnt_file(&args.input_path)?;
-    let info_hash = torrent_mta.calculate_info_hash()?;
+    let bytes = std::fs::read(&args.input_path)?;
+    let torrent_mta = TorrentMetaData::from_bytes(&bytes)?;
+    let info_hash = calculate_info_hash(&bytes)?;
 
-    let peers = request_peers(&torrent_mta)
+    let peers = request_peers(&torrent_mta, info_hash)
         .await
         .expect("request peers failed!");
     if peers.is_empty() {
